@@ -1,0 +1,18 @@
+{
+  "admin": {
+    "name": "Admin User",
+    "email": "admin@pulse.ai",
+    "password": "$2b$12$BokF0svLUg6DjVgpgsdl6Oqzgm7SmyNeusT9v0fW2NiCcItbqziHW",
+    "role": "admin",
+    "joined": "2024-01-01",
+    "avatar": "\ud83d\udee1\ufe0f"
+  },
+  "diksha123": {
+    "name": "Diksha Sharma",
+    "email": "diya01210@gmail.com",
+    "password": "$2b$12$zZZ5UYAAFZo6wMQdTFmB8.PQY8Uv3rHeBd1shXmghh524nHypTsUe",
+    "role": "user",
+    "joined": "2026-03-20",
+    "avatar": "\ud83d\udc64"
+  }
+}
