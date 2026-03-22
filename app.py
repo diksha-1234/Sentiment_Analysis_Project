@@ -30,11 +30,7 @@ from auth.auth_manager   import login, signup, get_google_auth_url
 # ── Cache helpers ─────────────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False)
 def _cached_preprocess(csv_hash: str, scheme: str):
-    try:
-        from data.storage import load_data
-        df_raw = load_data()
-    except Exception:
-        df_raw = pd.read_csv("data/data.csv")
+    df_raw = pd.read_csv("data/data.csv")
     if scheme != "All Schemes":
         key   = scheme.split("—")[0].strip().split(" ")[0]
         df_f  = df_raw[df_raw["Scheme"].str.contains(key, case=False, na=False)]
@@ -653,7 +649,12 @@ else:
                 if "Source" in df.columns:
                     # ── Filter to current 4 sources only ──────────────────────
                     # Excludes old Twitter/Instagram rows still in data.csv
-                    valid_sources = {"YouTube", "News App", "Google News", "Hindi News","Dainik Bhaskar", "Amar Ujala", "Navbharat Times","Jagran", "NDTV Hindi", "ABP Live",}
+                    valid_sources = {
+                        "YouTube", "News App", "Google News",
+                        # Individual Hindi newspaper names from scraper.py
+                        "Dainik Bhaskar", "Amar Ujala", "Navbharat Times",
+                        "Jagran", "NDTV Hindi", "ABP Live",
+                    }
                     df_plot = df[df["Source"].isin(valid_sources)]
                     if len(df_plot) == 0:
                         df_plot = df  # fallback if new data not yet fetched
@@ -705,7 +706,12 @@ else:
                 st.markdown("<div class='card'>", unsafe_allow_html=True)
                 st.markdown("<div class='label'>Platform × Sentiment Heatmap</div>", unsafe_allow_html=True)
                 # Only show current 4 platforms in heatmap
-                valid_sources = {"YouTube", "News App", "Google News", "Hindi News","Dainik Bhaskar", "Amar Ujala", "Navbharat Times","Jagran", "NDTV Hindi", "ABP Live",}
+                valid_sources = {
+                    "YouTube", "News App", "Google News",
+                    # Individual Hindi newspaper names from scraper.py
+                    "Dainik Bhaskar", "Amar Ujala", "Navbharat Times",
+                    "Jagran", "NDTV Hindi", "ABP Live",
+                }
                 df_heat = df[df["Source"].isin(valid_sources)]
                 if len(df_heat) == 0:
                     df_heat = df
@@ -946,18 +952,25 @@ else:
 
         # ── Source info box ───────────────────────────────────────────────────
         st.markdown("""
-        <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:18px;">
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:18px;">
           <div style="background:rgba(56,189,248,0.07);border:1px solid rgba(56,189,248,0.2);border-radius:8px;padding:8px 14px;font-family:'IBM Plex Mono',monospace;font-size:9px;color:#38bdf8;letter-spacing:1.5px;">▶ YouTube — Official API</div>
           <div style="background:rgba(52,211,153,0.07);border:1px solid rgba(52,211,153,0.2);border-radius:8px;padding:8px 14px;font-family:'IBM Plex Mono',monospace;font-size:9px;color:#34d399;letter-spacing:1.5px;">▶ News App — Official API</div>
           <div style="background:rgba(129,140,248,0.07);border:1px solid rgba(129,140,248,0.2);border-radius:8px;padding:8px 14px;font-family:'IBM Plex Mono',monospace;font-size:9px;color:#818cf8;letter-spacing:1.5px;">▶ Google News — RSS Feed</div>
-          <div style="background:rgba(251,191,36,0.07);border:1px solid rgba(251,191,36,0.2);border-radius:8px;padding:8px 14px;font-family:'IBM Plex Mono',monospace;font-size:9px;color:#fbbf24;letter-spacing:1.5px;">▶ Hindi News — RSS Feed</div>
+          <div style="background:rgba(251,191,36,0.07);border:1px solid rgba(251,191,36,0.2);border-radius:8px;padding:8px 14px;font-family:'IBM Plex Mono',monospace;font-size:9px;color:#fbbf24;letter-spacing:1.5px;">▶ Dainik Bhaskar — RSS</div>
+          <div style="background:rgba(251,191,36,0.07);border:1px solid rgba(251,191,36,0.2);border-radius:8px;padding:8px 14px;font-family:'IBM Plex Mono',monospace;font-size:9px;color:#fbbf24;letter-spacing:1.5px;">▶ Amar Ujala — RSS</div>
+          <div style="background:rgba(251,191,36,0.07);border:1px solid rgba(251,191,36,0.2);border-radius:8px;padding:8px 14px;font-family:'IBM Plex Mono',monospace;font-size:9px;color:#fbbf24;letter-spacing:1.5px;">▶ NDTV Hindi — RSS</div>
+          <div style="background:rgba(251,191,36,0.07);border:1px solid rgba(251,191,36,0.2);border-radius:8px;padding:8px 14px;font-family:'IBM Plex Mono',monospace;font-size:9px;color:#fbbf24;letter-spacing:1.5px;">▶ ABP Live — RSS</div>
         </div>""", unsafe_allow_html=True)
 
         if st.session_state.df_store is not None:
             df = st.session_state.df_store
 
-            # Filter to only current 4 sources
-            valid_sources = {"YouTube", "News App", "Google News", "Hindi News","Dainik Bhaskar", "Amar Ujala", "Navbharat Times","Jagran", "NDTV Hindi", "ABP Live",}
+            # All current valid sources — matches scraper.py source names exactly
+            valid_sources = {
+                "YouTube", "News App", "Google News",
+                "Dainik Bhaskar", "Amar Ujala", "Navbharat Times",
+                "Jagran", "NDTV Hindi", "ABP Live",
+            }
             df_plat = df[df["Source"].isin(valid_sources)]
             if len(df_plat) == 0:
                 df_plat = df  # fallback
@@ -1021,8 +1034,8 @@ else:
           </div>
           <div style="background:var(--bg3);border:1px solid var(--border2);border-radius:8px;padding:12px;text-align:center;">
             <div style="font-size:18px;margin-bottom:4px;">🗞️</div>
-            <div style="font-family:'IBM Plex Mono',monospace;font-size:8px;color:#fbbf24;letter-spacing:1.5px;">HINDI NEWS</div>
-            <div style="font-family:'Inter',sans-serif;font-size:10px;color:#4a6380;margin-top:3px;">RSS Feed · No key needed</div>
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:8px;color:#fbbf24;letter-spacing:1.5px;">HINDI NEWS RSS</div>
+            <div style="font-family:'Inter',sans-serif;font-size:10px;color:#4a6380;margin-top:3px;">Bhaskar · Ujala · NDTV · ABP</div>
           </div>
         </div>""", unsafe_allow_html=True)
 
@@ -1049,10 +1062,22 @@ else:
 
             tot = sum(cnts.values())
 
-            # ── Show 4 source metric cards ────────────────────────────────────
-            c1, c2, c3, c4 = st.columns(4)
-            source_icons = {"YouTube":       "📺","News App":      "📰","Google News":   "🌐","Hindi News":    "🗞️","Dainik Bhaskar":"🗞️","Amar Ujala":    "🗞️","Navbharat Times":"🗞️","Jagran":        "🗞️","NDTV Hindi":    "🗞️","ABP Live":      "🗞️",}
-            for col, (src, cnt) in zip([c1,c2,c3,c4], cnts.items()):
+            # ── Show source metric cards dynamically ──────────────────────────
+            # cnts has 4 keys: YouTube, News App, Google News, Hindi News
+            source_icons = {
+                "YouTube":        "📺",
+                "News App":       "📰",
+                "Google News":    "🌐",
+                "Hindi News":     "🗞️",
+                "Dainik Bhaskar": "🗞️",
+                "Amar Ujala":     "🗞️",
+                "Navbharat Times":"🗞️",
+                "Jagran":         "🗞️",
+                "NDTV Hindi":     "🗞️",
+                "ABP Live":       "🗞️",
+            }
+            cols = st.columns(len(cnts))
+            for col, (src, cnt) in zip(cols, cnts.items()):
                 icon = source_icons.get(src, "📡")
                 col.markdown(f"""<div class="mcard" style="margin-top:10px;">
                     <div style="font-size:22px;margin-bottom:4px;">{icon}</div>
@@ -1072,11 +1097,7 @@ else:
         st.markdown("<div class='label'>Dataset Status</div>", unsafe_allow_html=True)
 
         try:
-            try:
-                from data.storage import load_data
-                ds = load_data()
-            except Exception:
-                ds = pd.read_csv("data/data.csv")
+            ds = pd.read_csv("data/data.csv")
 
             # ── Why schemes may show more than 40 ─────────────────────────────
             # generate_data.py uses short names ("PMAY", "PM Kisan")
@@ -1087,10 +1108,12 @@ else:
             known_rows     = ds[ds["Scheme"].isin(known_schemes)]
             unknown_scheme_count = ds["Scheme"].nunique() - len(known_schemes & set(ds["Scheme"].unique()))
 
-            # ── Why sources may show more than 4 ──────────────────────────────
-            # Old data.csv may have Twitter/Instagram rows from previous fetches
-            # Filter display to only current 4 sources
-            valid_sources    = {"YouTube", "News App", "Google News", "Hindi News"}
+            # All valid sources — must match source names used in scraper.py exactly
+            valid_sources    = {
+                "YouTube", "News App", "Google News",
+                "Dainik Bhaskar", "Amar Ujala", "Navbharat Times",
+                "Jagran", "NDTV Hindi", "ABP Live",
+            }
             current_src_rows = ds[ds["Source"].isin(valid_sources)]
 
             d1, d2, d3, d4 = st.columns(4)
@@ -1107,20 +1130,24 @@ else:
 
             # Explain scheme count if more than 40
             if ds["Scheme"].nunique() > 40:
-                st.info(f"ℹ️ Scheme count shows {ds['Scheme'].nunique()} because your data.csv contains both short names (from generate_data.py like 'PMAY') and full names (from scraper.py like 'PMAY — Pradhan Mantri Awas Yojana'). Run generate_data.py again to regenerate with full names only, then re-fetch data.")
+                st.info(f"ℹ️ Scheme count shows {ds['Scheme'].nunique()} because your data.csv contains both short names (from generate_data.py) and full names (from scraper.py). Run data/fix_data.py to clean this up.")
 
-            # Explain source count if more than 4
+            # Explain source count if unexpected sources exist
             old_sources = set(ds["Source"].unique()) - valid_sources
             if old_sources:
-                st.info(f"ℹ️ Your data.csv still contains {len(old_sources)} old source(s): {', '.join(old_sources)}. These are from previous fetches. They will reduce as you fetch new data. Or delete data.csv and regenerate.")
+                st.info(f"ℹ️ Your data.csv still contains old source(s): {', '.join(sorted(old_sources))}. Run data/fix_data.py to remove them.")
 
-            # Source chart — show all sources with old ones greyed
-            sc2 = ds["Source"].value_counts()
-            colors = ["#38bdf8" if s in valid_sources else "#2a3a50" for s in sc2.index]
-            fs2 = px.bar(x=sc2.index, y=sc2.values,
-                color=sc2.index.map(lambda x: "Current" if x in valid_sources else "Legacy"),
+            # Source chart — fixed plotly error by using DataFrame not Series
+            sc2 = ds["Source"].value_counts().reset_index()
+            sc2.columns = ["Source", "Count"]
+            sc2["Status"] = sc2["Source"].apply(
+                lambda x: "Current" if x in valid_sources else "Legacy"
+            )
+            fs2 = px.bar(
+                sc2, x="Source", y="Count", color="Status",
                 color_discrete_map={"Current":"#38bdf8","Legacy":"#2a3a50"},
-                labels={"x":"","y":"Count","color":"Status"})
+                labels={"Source":"","Count":"Count","Status":"Status"},
+            )
             fs2.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
                 font_color="#8fa8c8", legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color="#8fa8c8")),
                 xaxis=dict(showgrid=False, color="#4a6380"),
@@ -1155,7 +1182,7 @@ else:
              "LangDetect + deep-translator pipeline supports English, Hindi, Tamil, Telugu, Bengali, Hinglish, and more. Non-English text is auto-translated before analysis."),
             ("02","Single Platform","#818cf8",
              "95% of published papers analyse a single source, missing the broader public discourse across platforms.",
-             "Multi-source architecture covers YouTube (Official API), NewsAPI (Official API), Google News RSS, and Hindi News RSS (Dainik Bhaskar, Amar Ujala, Navbharat Times). Cross-platform comparison in the Platforms tab."),
+             "Multi-source architecture covers YouTube (Official API), NewsAPI (Official API), Google News RSS (real-time English headlines), and Hindi News RSS — Dainik Bhaskar, Amar Ujala, Navbharat Times, Jagran, NDTV Hindi, ABP Live. Cross-platform comparison in the Platforms tab."),
             ("03","Random Model Selection","#34d399",
              "Researchers arbitrarily select algorithms without benchmarking them against the specific dataset characteristics.",
              "Adaptive engine profiles data volume, sarcasm ratio, language diversity, and avg comment length. Trains 7 classical ML models + TextBlob + VADER. Best model selected by data-aware scoring. Optional LSTM, BiLSTM, CNN, ALBERT, DistilBERT."),
