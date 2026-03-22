@@ -51,7 +51,19 @@ def _get_secret(key: str) -> str:
 
 GOOGLE_CLIENT_ID     = _get_secret("GOOGLE_CLIENT_ID")
 GOOGLE_CLIENT_SECRET = _get_secret("GOOGLE_CLIENT_SECRET")
-REDIRECT_URI         = "http://localhost:8501"
+def _get_redirect_uri() -> str:
+    # On Streamlit Cloud — use the deployed URL
+    # Locally — use localhost
+    try:
+        import streamlit as st
+        cloud_url = st.secrets.get("REDIRECT_URI", "")
+        if cloud_url:
+            return cloud_url
+    except:
+        pass
+    return os.getenv("REDIRECT_URI", "http://localhost:8501")
+
+REDIRECT_URI = _get_redirect_uri()
 
 SCHEME_EMOJI = {
     "PMAY — Pradhan Mantri Awas Yojana":"🏘️","Ayushman Bharat — PM-JAY":"🏥",
