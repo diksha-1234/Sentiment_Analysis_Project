@@ -10,3 +10,4 @@ bcrypt>=4.1.2
 matplotlib>=3.7.0
 wordcloud>=1.9.3
 python-dotenv>=1.0.0
+

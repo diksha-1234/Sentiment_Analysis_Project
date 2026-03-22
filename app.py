@@ -1,8 +1,16 @@
 """
-app.py — Pulse Sentiment AI · Main Application
-═══════════════════════════════════════════════
+app.py — Pulse Sentiment AI
 Run:  streamlit run app.py
 """
+import nltk
+for _pkg, _path in [
+    ("vader_lexicon", "sentiment/vader_lexicon.zip"),
+    ("stopwords",     "corpora/stopwords"),
+    ("punkt",         "tokenizers/punkt"),
+]:
+    try:    nltk.data.find(_path)
+    except LookupError: nltk.download(_pkg, quiet=True)
+    
 import sys, os
 sys.path.insert(0, os.path.dirname(__file__))
 from dotenv import load_dotenv
@@ -19,247 +27,784 @@ from modules.model       import train_models, get_detailed_metrics, predict_live
 from modules.scraper     import ALL_SCHEMES, fetch_all, fetch_instagram_post
 from auth.auth_manager   import login, signup, get_google_auth_url
 
+# ── Cache helpers ─────────────────────────────────────────────────────────────
+@st.cache_data(show_spinner=False)
+def _cached_preprocess(csv_hash: str, scheme: str):
+    df_raw = pd.read_csv("data/data.csv")
+    if scheme != "All Schemes":
+        key   = scheme.split("—")[0].strip().split(" ")[0]
+        df_f  = df_raw[df_raw["Scheme"].str.contains(key, case=False, na=False)]
+        df_raw = df_f if len(df_f) >= 10 else df_raw
+    return preprocess_dataframe(df_raw)
+
+def _get_csv_hash() -> str:
+    try:    return str(os.path.getmtime("data/data.csv"))
+    except: return "0"
+
+# ── Config ────────────────────────────────────────────────────────────────────
 st.set_page_config(page_title="Pulse · Sentiment AI", page_icon="🧠",
                    layout="wide", initial_sidebar_state="collapsed")
 
-GOOGLE_CLIENT_ID     = os.getenv("GOOGLE_CLIENT_ID", "")
-GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
+def _get_secret(key: str) -> str:
+    try:    return st.secrets.get(key, os.getenv(key, ""))
+    except: return os.getenv(key, "")
+
+GOOGLE_CLIENT_ID     = _get_secret("GOOGLE_CLIENT_ID")
+GOOGLE_CLIENT_SECRET = _get_secret("GOOGLE_CLIENT_SECRET")
 REDIRECT_URI         = "http://localhost:8501"
 
-# ── Scheme emoji map ──────────────────────────────────────────────────────────
 SCHEME_EMOJI = {
-    "PMAY — Pradhan Mantri Awas Yojana":"🏘️",
-    "Ayushman Bharat — PM-JAY":"🏥",
-    "Poshan Abhiyaan — Nutrition Mission":"🥗",
-    "Ayushman Bharat Digital Mission":"💊",
-    "PM Kisan Samman Nidhi":"🌾",
-    "Fasal Bima — PM Crop Insurance":"🌱",
-    "Kisan Credit Card":"💳",
-    "e-NAM — National Agriculture Market":"🛒",
-    "Digital India Initiative":"💡",
-    "BharatNet — Rural Internet":"🌐",
-    "UPI — Unified Payments Interface":"📱",
-    "Jan Dhan Yojana — Financial Inclusion":"🏦",
-    "Mudra Yojana — MSME Loans":"💰",
-    "Stand Up India Scheme":"📈",
-    "Atal Pension Yojana":"👴",
-    "PM Jeevan Jyoti Bima":"🛡️",
-    "PM Suraksha Bima":"🔐",
-    "Ujjwala Yojana — LPG for Poor":"🔥",
-    "Saubhagya — Household Electrification":"⚡",
-    "Solar Rooftop — PM Surya Ghar":"☀️",
-    "FAME — Electric Vehicle Scheme":"🚗",
-    "Swachh Bharat Mission":"♻️",
-    "Jal Jeevan Mission — Har Ghar Jal":"💧",
-    "AMRUT — Urban Development":"🏙️",
-    "Skill India — PMKVY":"🎓",
-    "Startup India":"🚀",
-    "Make in India":"🏭",
-    "PM eVIDYA — Digital Education":"📚",
-    "Beti Bachao Beti Padhao":"👧",
-    "Sukanya Samriddhi Yojana":"🌸",
-    "PM Matru Vandana — Maternity Benefit":"🤱",
-    "Pradhan Mantri Gram Sadak Yojana":"🛣️",
-    "Bharatmala — Highway Project":"🛤️",
-    "Smart Cities Mission":"🏢",
-    "Sagarmala — Port Development":"⚓",
-    "One Nation One Ration Card":"🍚",
-    "PM Garib Kalyan Anna Yojana":"🌽",
-    "PM SVANidhi — Street Vendor Loan":"🛍️",
-    "Vishwakarma Yojana":"🔨",
-    "Atmanirbhar Bharat":"🇮🇳",
+    "PMAY — Pradhan Mantri Awas Yojana":"🏘️","Ayushman Bharat — PM-JAY":"🏥",
+    "Poshan Abhiyaan — Nutrition Mission":"🥗","Ayushman Bharat Digital Mission":"💊",
+    "PM Kisan Samman Nidhi":"🌾","Fasal Bima — PM Crop Insurance":"🌱",
+    "Kisan Credit Card":"💳","e-NAM — National Agriculture Market":"🛒",
+    "Digital India Initiative":"💡","BharatNet — Rural Internet":"🌐",
+    "UPI — Unified Payments Interface":"📱","Jan Dhan Yojana — Financial Inclusion":"🏦",
+    "Mudra Yojana — MSME Loans":"💰","Stand Up India Scheme":"📈",
+    "Atal Pension Yojana":"👴","PM Jeevan Jyoti Bima":"🛡️","PM Suraksha Bima":"🔐",
+    "Ujjwala Yojana — LPG for Poor":"🔥","Saubhagya — Household Electrification":"⚡",
+    "Solar Rooftop — PM Surya Ghar":"☀️","FAME — Electric Vehicle Scheme":"🚗",
+    "Swachh Bharat Mission":"♻️","Jal Jeevan Mission — Har Ghar Jal":"💧",
+    "AMRUT — Urban Development":"🏙️","Skill India — PMKVY":"🎓",
+    "Startup India":"🚀","Make in India":"🏭","PM eVIDYA — Digital Education":"📚",
+    "Beti Bachao Beti Padhao":"👧","Sukanya Samriddhi Yojana":"🌸",
+    "PM Matru Vandana — Maternity Benefit":"🤱","Pradhan Mantri Gram Sadak Yojana":"🛣️",
+    "Bharatmala — Highway Project":"🛤️","Smart Cities Mission":"🏢",
+    "Sagarmala — Port Development":"⚓","One Nation One Ration Card":"🍚",
+    "PM Garib Kalyan Anna Yojana":"🌽","PM SVANidhi — Street Vendor Loan":"🛍️",
+    "Vishwakarma Yojana":"🔨","Atmanirbhar Bharat":"🇮🇳",
 }
 
 MODEL_TYPE_COLORS = {
-    "Classical ML":     "#38bdf8",
-    "NLP/Lexicon":      "#34d399",
-    "Deep Learning":    "#818cf8",
-    "Transformer/BERT": "#f59e0b",
+    "Classical ML":"#38bdf8","NLP/Lexicon":"#34d399",
+    "Deep Learning":"#818cf8","Transformer/BERT":"#f59e0b",
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  CSS
+#  GLOBAL CSS — Pure dark theme, sharp contrast, premium typography
 # ─────────────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:ital,wght@0,300;0,400;0,500;1,300&family=Outfit:wght@300;400;500;600&display=swap');
-*,*::before,*::after{box-sizing:border-box}
-html,body,.stApp{background:#05080f!important;color:#dde3ef;font-family:'Outfit',sans-serif}
-header,footer{visibility:hidden!important}
-#MainMenu,.stDeployButton{display:none!important}
-[data-testid="stSidebar"]{display:none!important}
-.stApp::before{content:"";position:fixed;inset:0;
-  background:radial-gradient(ellipse 80% 60% at 20% 10%,rgba(14,165,233,.10) 0%,transparent 60%),
-             radial-gradient(ellipse 70% 50% at 80% 80%,rgba(99,102,241,.10) 0%,transparent 60%),
-             radial-gradient(ellipse 50% 40% at 50% 50%,rgba(16,185,129,.05) 0%,transparent 70%),
-             linear-gradient(135deg,#05080f 0%,#0a0f1e 100%);
-  animation:bgPulse 12s ease-in-out infinite alternate;pointer-events:none;z-index:0}
-@keyframes bgPulse{0%{opacity:1}100%{opacity:.85}}
-.stApp::after{content:"";position:fixed;inset:0;
-  background-image:linear-gradient(rgba(56,189,248,.025) 1px,transparent 1px),
-                   linear-gradient(90deg,rgba(56,189,248,.025) 1px,transparent 1px);
-  background-size:64px 64px;pointer-events:none;z-index:0}
-.block-container{position:relative;z-index:2;padding:1.5rem 2.5rem 4rem!important;max-width:1400px!important}
-h1,h2,h3{font-family:'Syne',sans-serif!important;color:#f1f5f9!important;letter-spacing:-.5px}
-.g-panel{background:rgba(255,255,255,.028);border:1px solid rgba(255,255,255,.07);border-radius:20px;
-  padding:28px 32px;backdrop-filter:blur(20px);position:relative;overflow:hidden;
-  transition:border-color .3s,box-shadow .3s;margin-bottom:20px}
-.g-panel::before{content:"";position:absolute;top:0;left:10%;right:10%;height:1px;
-  background:linear-gradient(90deg,transparent,rgba(56,189,248,.4),transparent)}
-.g-panel:hover{border-color:rgba(56,189,248,.18);box-shadow:0 0 50px rgba(56,189,248,.06),0 24px 60px rgba(0,0,0,.45)}
-.eyebrow{font-family:'DM Mono',monospace;font-size:10px;letter-spacing:3px;text-transform:uppercase;
-  color:#38bdf8;display:flex;align-items:center;gap:10px;margin-bottom:18px}
-.eyebrow::after{content:"";flex:1;height:1px;background:linear-gradient(90deg,rgba(56,189,248,.35),transparent)}
-.hero-wrap{text-align:center;padding:52px 20px 36px}
-.hero-badge{display:inline-flex;align-items:center;gap:8px;background:rgba(56,189,248,.08);
-  border:1px solid rgba(56,189,248,.22);border-radius:100px;padding:6px 20px;font-family:'DM Mono',monospace;
-  font-size:11px;letter-spacing:2.5px;color:#38bdf8;margin-bottom:22px;text-transform:uppercase}
-.live-dot{width:6px;height:6px;border-radius:50%;background:#34d399;animation:livePulse 2s ease infinite;display:inline-block}
-@keyframes livePulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.6;transform:scale(.7)}}
-.hero-title{font-family:'Syne',sans-serif;font-size:clamp(38px,5.5vw,72px);font-weight:800;
-  line-height:1.0;letter-spacing:-2px;
-  background:linear-gradient(130deg,#f8fafc 10%,#38bdf8 40%,#818cf8 65%,#34d399 90%);
-  background-size:250% auto;-webkit-background-clip:text;-webkit-text-fill-color:transparent;
-  background-clip:text;animation:textShimmer 7s linear infinite;margin-bottom:14px}
-@keyframes textShimmer{0%{background-position:0% center}100%{background-position:250% center}}
-.hero-sub{font-family:'DM Mono',monospace;font-size:12px;color:#475569;letter-spacing:2px;text-transform:uppercase}
-.h-div{height:1px;background:linear-gradient(90deg,transparent,rgba(56,189,248,.25),rgba(99,102,241,.25),transparent);margin:24px 0}
-.metric-card{background:rgba(255,255,255,.025);border:1px solid rgba(255,255,255,.06);border-radius:18px;
-  padding:24px 20px;text-align:center;position:relative;overflow:hidden;transition:all .3s}
-.metric-card::after{content:"";position:absolute;bottom:0;left:0;right:0;height:2px;
-  background:linear-gradient(90deg,#0ea5e9,#6366f1);transform:scaleX(0);transform-origin:left;transition:transform .3s}
-.metric-card:hover{border-color:rgba(56,189,248,.2)}
-.metric-card:hover::after{transform:scaleX(1)}
-.metric-val{font-family:'Syne',sans-serif;font-size:38px;font-weight:800;
-  background:linear-gradient(135deg,#38bdf8,#818cf8);-webkit-background-clip:text;
-  -webkit-text-fill-color:transparent;background-clip:text;line-height:1.1}
-.metric-lbl{font-family:'DM Mono',monospace;font-size:10px;letter-spacing:2px;
-  text-transform:uppercase;color:#475569;margin-top:6px}
-.stTextInput>div>div>input,.stTextArea>div>div>textarea{
-  background:rgba(255,255,255,.04)!important;border:1px solid rgba(255,255,255,.10)!important;
-  border-radius:14px!important;color:#e2e8f0!important;font-family:'Outfit',sans-serif!important;
-  font-size:14px!important;padding:13px 18px!important;transition:border-color .3s,box-shadow .3s!important}
-.stTextInput>div>div>input:focus,.stTextArea>div>div>textarea:focus{
-  border-color:rgba(56,189,248,.5)!important;box-shadow:0 0 0 3px rgba(56,189,248,.09)!important}
-.stTextInput>label,.stTextArea>label,.stSelectbox>label{
-  font-family:'DM Mono',monospace!important;font-size:10px!important;
-  letter-spacing:2.5px!important;text-transform:uppercase!important;color:#64748b!important}
-.stSelectbox>div>div{background:rgba(255,255,255,.04)!important;border:1px solid rgba(255,255,255,.10)!important;
-  border-radius:14px!important;color:#e2e8f0!important;font-family:'Outfit',sans-serif!important}
-.stButton>button{background:rgba(14,165,233,.12)!important;border:1px solid rgba(14,165,233,.35)!important;
-  border-radius:12px!important;color:#e2e8f0!important;font-family:'DM Mono',monospace!important;
-  font-size:11px!important;letter-spacing:2px!important;text-transform:uppercase!important;
-  padding:14px 24px!important;width:100%!important;transition:all .25s!important}
-.stButton>button:hover{background:rgba(14,165,233,.22)!important;border-color:rgba(14,165,233,.65)!important;
-  box-shadow:0 0 28px rgba(14,165,233,.18),0 8px 24px rgba(0,0,0,.3)!important;
-  transform:translateY(-2px)!important;color:#fff!important}
-div[data-testid="column"]:first-child .stButton>button{
-  background:linear-gradient(135deg,#0ea5e9,#6366f1)!important;border:none!important;
-  color:white!important;font-weight:600!important;box-shadow:0 6px 24px rgba(14,165,233,.28)!important}
-.stTabs [data-baseweb="tab-list"]{background:rgba(255,255,255,.03)!important;border-radius:14px!important;
-  padding:4px!important;gap:4px!important;border:1px solid rgba(255,255,255,.07)!important}
-.stTabs [data-baseweb="tab"]{font-family:'DM Mono',monospace!important;font-size:11px!important;
-  letter-spacing:1.5px!important;text-transform:uppercase!important;color:#64748b!important;
-  border-radius:10px!important;padding:10px 20px!important;transition:all .2s!important}
-.stTabs [aria-selected="true"]{background:rgba(14,165,233,.15)!important;color:#38bdf8!important}
-.stTabs [data-baseweb="tab-highlight"],.stTabs [data-baseweb="tab-border"]{display:none!important}
-::-webkit-scrollbar{width:4px;background:#05080f}
-::-webkit-scrollbar-thumb{background:linear-gradient(#38bdf8,#818cf8);border-radius:4px}
-#status-bar{position:fixed;bottom:0;left:0;right:0;height:2px;
-  background:linear-gradient(90deg,#0ea5e9,#6366f1,#34d399,#0ea5e9);
-  background-size:300% auto;animation:shimBar 4s linear infinite;z-index:9999}
-@keyframes shimBar{0%{background-position:0% center}100%{background-position:300% center}}
-.google-btn{display:flex;align-items:center;justify-content:center;gap:12px;
-  background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.14);border-radius:12px;
-  padding:13px 24px;color:#e2e8f0;font-family:'Outfit',sans-serif;font-size:14px;font-weight:500;
-  cursor:pointer;transition:all .25s;text-decoration:none;width:100%;text-align:center}
-.google-btn:hover{background:rgba(255,255,255,.10);transform:translateY(-2px);color:white;text-decoration:none}
-.stDataFrame{border:1px solid rgba(255,255,255,.07)!important;border-radius:14px!important;overflow:hidden!important}
+@import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@300;400;500&family=Inter:wght@300;400;500;600&display=swap');
+
+/* ══════════════════════════════════════════════════════
+   FORCED DARK THEME — CSS VARIABLES
+══════════════════════════════════════════════════════ */
+:root {
+    --bg:        #080c14;
+    --bg2:       #0d1420;
+    --bg3:       #121a28;
+    --bg4:       #1a2235;
+    --surface:   rgba(13,20,32,0.95);
+    --surface2:  rgba(18,26,40,0.9);
+    --border:    rgba(99,179,237,0.08);
+    --border2:   rgba(99,179,237,0.16);
+    --border3:   rgba(99,179,237,0.28);
+    --txt:       #e8eef8;
+    --txt2:      #8fa8c8;
+    --txt3:      #4a6380;
+    --txt4:      #2a3a50;
+    --accent:    #38bdf8;
+    --accent2:   #818cf8;
+    --accent3:   #34d399;
+    --green:     #34d399;
+    --red:       #fb7185;
+    --amber:     #fbbf24;
+    --purple:    #a78bfa;
+    --pink:      #f472b6;
+    --shadow:    0 2px 8px rgba(0,0,0,0.4), 0 8px 32px rgba(0,0,0,0.3);
+    --shadow-lg: 0 8px 32px rgba(0,0,0,0.5), 0 24px 64px rgba(0,0,0,0.4);
+    --glow:      0 0 20px rgba(56,189,248,0.15);
+    --glow-lg:   0 0 40px rgba(56,189,248,0.2);
+    --radius:    14px;
+    --radius-sm: 8px;
+    --radius-xs: 5px;
+}
+
+/* ── FORCE DARK EVERYWHERE ── */
+html, body, .stApp, .stApp > div,
+[data-testid="stAppViewContainer"],
+[data-testid="stHeader"],
+[data-testid="stToolbar"],
+section[data-testid="stSidebar"],
+.main, .block-container {
+    background-color: var(--bg) !important;
+    color: var(--txt) !important;
+    font-family: 'Inter', sans-serif !important;
+}
+
+/* ── HIDE STREAMLIT CHROME ── */
+header, footer, #MainMenu, .stDeployButton,
+[data-testid="stDecoration"],
+[data-testid="stStatusWidget"] {
+    display: none !important;
+    visibility: hidden !important;
+}
+[data-testid="stSidebar"] { display: none !important; }
+
+/* ── NOISE TEXTURE OVERLAY ── */
+.stApp::before {
+    content: "";
+    position: fixed; inset: 0; z-index: 0;
+    pointer-events: none;
+    background-image:
+        radial-gradient(ellipse 80% 50% at 10% 5%,  rgba(56,189,248,0.06) 0%, transparent 55%),
+        radial-gradient(ellipse 60% 40% at 90% 90%,  rgba(129,140,248,0.06) 0%, transparent 55%),
+        radial-gradient(ellipse 40% 35% at 55% 45%,  rgba(52,211,153,0.03) 0%, transparent 60%),
+        url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
+    background-size: cover, cover, cover, 200px 200px;
+    animation: ambientShift 20s ease-in-out infinite alternate;
+}
+@keyframes ambientShift {
+    0%   { opacity: 0.6; }
+    50%  { opacity: 1.0; }
+    100% { opacity: 0.7; }
+}
+
+/* ── SCANLINE EFFECT ── */
+.stApp::after {
+    content: "";
+    position: fixed; inset: 0; z-index: 0;
+    pointer-events: none;
+    background: repeating-linear-gradient(
+        0deg,
+        transparent,
+        transparent 2px,
+        rgba(0,0,0,0.03) 2px,
+        rgba(0,0,0,0.03) 4px
+    );
+}
+
+.block-container {
+    position: relative; z-index: 2;
+    padding: 2rem 2.5rem 6rem !important;
+    max-width: 1360px !important;
+}
+
+/* ── PAGE ENTRY ── */
+.block-container { animation: pageIn .5s cubic-bezier(.16,1,.3,1) both; }
+@keyframes pageIn {
+    from { opacity:0; transform: translateY(16px); }
+    to   { opacity:1; transform: translateY(0); }
+}
+
+/* ══════════════════════════════════════════════════════
+   CARDS
+══════════════════════════════════════════════════════ */
+.card {
+    background: var(--surface);
+    border: 1px solid var(--border2);
+    border-radius: var(--radius);
+    padding: 24px 28px;
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    box-shadow: var(--shadow);
+    transition: border-color .3s ease, box-shadow .3s ease, transform .2s ease;
+    margin-bottom: 16px;
+    position: relative;
+    overflow: hidden;
+}
+.card::before {
+    content: "";
+    position: absolute; top: 0; left: 0; right: 0; height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(56,189,248,0.4), transparent);
+    opacity: 0;
+    transition: opacity .3s;
+}
+.card:hover {
+    border-color: var(--border3);
+    box-shadow: var(--shadow-lg), var(--glow);
+    transform: translateY(-1px);
+}
+.card:hover::before { opacity: 1; }
+
+/* ══════════════════════════════════════════════════════
+   SECTION LABELS
+══════════════════════════════════════════════════════ */
+.label {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 9.5px;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: var(--accent);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 18px;
+    opacity: 0.9;
+}
+.label::before {
+    content: "";
+    width: 3px; height: 3px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 6px var(--accent);
+}
+.label::after {
+    content: "";
+    flex: 1; height: 1px;
+    background: linear-gradient(90deg, rgba(56,189,248,0.25), transparent);
+}
+
+/* ══════════════════════════════════════════════════════
+   TYPOGRAPHY
+══════════════════════════════════════════════════════ */
+h1, h2, h3 {
+    font-family: 'Syne', sans-serif !important;
+    font-weight: 700 !important;
+    color: var(--txt) !important;
+    letter-spacing: -.5px !important;
+}
+p, li, span, div {
+    color: var(--txt2);
+}
+
+/* ══════════════════════════════════════════════════════
+   INPUTS & FORMS
+══════════════════════════════════════════════════════ */
+.stTextInput > div > div > input,
+.stTextArea > div > div > textarea {
+    background: var(--bg3) !important;
+    border: 1px solid var(--border2) !important;
+    border-radius: var(--radius-sm) !important;
+    color: var(--txt) !important;
+    font-family: 'Inter', sans-serif !important;
+    font-size: 14px !important;
+    padding: 12px 16px !important;
+    transition: border-color .2s, box-shadow .2s !important;
+    box-shadow: inset 0 1px 3px rgba(0,0,0,0.3) !important;
+    caret-color: var(--accent) !important;
+}
+.stTextInput > div > div > input:focus,
+.stTextArea > div > div > textarea:focus {
+    border-color: var(--accent) !important;
+    box-shadow: 0 0 0 3px rgba(56,189,248,0.1), inset 0 1px 3px rgba(0,0,0,0.3) !important;
+    outline: none !important;
+    background: var(--bg4) !important;
+}
+.stTextInput > div > div > input::placeholder,
+.stTextArea > div > div > textarea::placeholder {
+    color: var(--txt3) !important;
+}
+.stTextInput > label, .stTextArea > label,
+.stSelectbox > label, .stNumberInput > label {
+    font-family: 'IBM Plex Mono', monospace !important;
+    font-size: 9px !important;
+    letter-spacing: 2.5px !important;
+    text-transform: uppercase !important;
+    color: var(--txt3) !important;
+}
+
+/* ── SELECTBOX ── */
+.stSelectbox > div > div {
+    background: var(--bg3) !important;
+    border: 1px solid var(--border2) !important;
+    border-radius: var(--radius-sm) !important;
+    color: var(--txt) !important;
+    font-family: 'Inter', sans-serif !important;
+    font-size: 14px !important;
+    box-shadow: inset 0 1px 3px rgba(0,0,0,0.3) !important;
+}
+.stSelectbox > div > div:hover {
+    border-color: var(--border3) !important;
+}
+[data-baseweb="select"] > div {
+    background: var(--bg3) !important;
+    border-color: var(--border2) !important;
+    color: var(--txt) !important;
+}
+[data-baseweb="popover"] {
+    background: var(--bg3) !important;
+    border: 1px solid var(--border2) !important;
+    border-radius: var(--radius-sm) !important;
+    box-shadow: var(--shadow-lg) !important;
+}
+[data-baseweb="menu"] { background: var(--bg3) !important; }
+[data-baseweb="option"]:hover { background: var(--bg4) !important; }
+
+/* ── NUMBER INPUT ── */
+.stNumberInput > div > div > input {
+    background: var(--bg3) !important;
+    border: 1px solid var(--border2) !important;
+    border-radius: var(--radius-sm) !important;
+    color: var(--txt) !important;
+    font-family: 'Inter', sans-serif !important;
+    font-size: 14px !important;
+    box-shadow: inset 0 1px 3px rgba(0,0,0,0.3) !important;
+}
+
+/* ══════════════════════════════════════════════════════
+   BUTTONS
+══════════════════════════════════════════════════════ */
+.stButton > button {
+    background: var(--bg3) !important;
+    border: 1px solid var(--border2) !important;
+    border-radius: var(--radius-sm) !important;
+    color: var(--txt2) !important;
+    font-family: 'IBM Plex Mono', monospace !important;
+    font-size: 10px !important;
+    letter-spacing: 2px !important;
+    text-transform: uppercase !important;
+    padding: 12px 20px !important;
+    width: 100% !important;
+    transition: all .25s cubic-bezier(.16,1,.3,1) !important;
+    box-shadow: var(--shadow) !important;
+    position: relative !important;
+    overflow: hidden !important;
+}
+.stButton > button::before {
+    content: "" !important;
+    position: absolute !important;
+    inset: 0 !important;
+    background: linear-gradient(135deg, rgba(56,189,248,0.05), rgba(129,140,248,0.05)) !important;
+    opacity: 0 !important;
+    transition: opacity .25s !important;
+}
+.stButton > button:hover {
+    background: var(--bg4) !important;
+    border-color: var(--accent) !important;
+    color: var(--accent) !important;
+    transform: translateY(-1px) !important;
+    box-shadow: var(--shadow), 0 0 16px rgba(56,189,248,0.15) !important;
+}
+.stButton > button:hover::before { opacity: 1 !important; }
+.stButton > button:active { transform: translateY(0) !important; }
+
+/* ── PRIMARY BUTTON (first column) ── */
+div[data-testid="column"]:first-child .stButton > button {
+    background: linear-gradient(135deg, #0ea5e9, #6366f1) !important;
+    border: none !important;
+    color: #ffffff !important;
+    font-weight: 500 !important;
+    box-shadow: 0 4px 20px rgba(14,165,233,0.3), 0 2px 8px rgba(0,0,0,0.4) !important;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.2) !important;
+}
+div[data-testid="column"]:first-child .stButton > button:hover {
+    background: linear-gradient(135deg, #38bdf8, #818cf8) !important;
+    color: #ffffff !important;
+    box-shadow: 0 6px 28px rgba(56,189,248,0.4), 0 2px 8px rgba(0,0,0,0.4) !important;
+    transform: translateY(-2px) !important;
+}
+
+/* ══════════════════════════════════════════════════════
+   TABS
+══════════════════════════════════════════════════════ */
+.stTabs [data-baseweb="tab-list"] {
+    background: var(--bg2) !important;
+    border-radius: 10px !important;
+    padding: 4px !important;
+    gap: 2px !important;
+    border: 1px solid var(--border) !important;
+    box-shadow: inset 0 1px 3px rgba(0,0,0,0.3) !important;
+}
+.stTabs [data-baseweb="tab"] {
+    font-family: 'IBM Plex Mono', monospace !important;
+    font-size: 10px !important;
+    letter-spacing: 2px !important;
+    text-transform: uppercase !important;
+    color: var(--txt3) !important;
+    border-radius: 7px !important;
+    padding: 9px 20px !important;
+    transition: all .2s !important;
+}
+.stTabs [data-baseweb="tab"]:hover {
+    color: var(--txt2) !important;
+    background: var(--bg3) !important;
+}
+.stTabs [aria-selected="true"] {
+    background: var(--bg4) !important;
+    color: var(--accent) !important;
+    box-shadow: 0 1px 6px rgba(0,0,0,0.4), 0 0 12px rgba(56,189,248,0.1) !important;
+    border: 1px solid var(--border2) !important;
+}
+.stTabs [data-baseweb="tab-highlight"],
+.stTabs [data-baseweb="tab-border"] { display: none !important; }
+
+/* ══════════════════════════════════════════════════════
+   ALERTS
+══════════════════════════════════════════════════════ */
+.stSuccess > div {
+    background: rgba(52,211,153,0.07) !important;
+    border: 1px solid rgba(52,211,153,0.25) !important;
+    border-radius: var(--radius-sm) !important;
+    color: #34d399 !important;
+    font-family: 'Inter', sans-serif !important;
+}
+.stError > div {
+    background: rgba(251,113,133,0.07) !important;
+    border: 1px solid rgba(251,113,133,0.25) !important;
+    border-radius: var(--radius-sm) !important;
+    color: #fb7185 !important;
+}
+.stWarning > div {
+    background: rgba(251,191,36,0.07) !important;
+    border: 1px solid rgba(251,191,36,0.25) !important;
+    border-radius: var(--radius-sm) !important;
+    color: #fbbf24 !important;
+}
+.stInfo > div {
+    background: rgba(56,189,248,0.07) !important;
+    border: 1px solid rgba(56,189,248,0.25) !important;
+    border-radius: var(--radius-sm) !important;
+    color: #38bdf8 !important;
+}
+
+/* ══════════════════════════════════════════════════════
+   METRIC CARDS
+══════════════════════════════════════════════════════ */
+.mcard {
+    background: var(--surface2);
+    border: 1px solid var(--border2);
+    border-radius: var(--radius);
+    padding: 22px 16px;
+    text-align: center;
+    transition: all .25s cubic-bezier(.16,1,.3,1);
+    position: relative;
+    overflow: hidden;
+}
+.mcard::before {
+    content: "";
+    position: absolute; inset: 0;
+    background: radial-gradient(ellipse at 50% 0%, rgba(56,189,248,0.06), transparent 70%);
+    opacity: 0;
+    transition: opacity .3s;
+}
+.mcard::after {
+    content: "";
+    position: absolute; bottom: 0; left: 0; right: 0; height: 2px;
+    background: linear-gradient(90deg, var(--accent), var(--accent2));
+    transform: scaleX(0);
+    transform-origin: center;
+    transition: transform .35s cubic-bezier(.16,1,.3,1);
+}
+.mcard:hover {
+    border-color: var(--border3);
+    box-shadow: var(--glow);
+    transform: translateY(-2px);
+}
+.mcard:hover::before { opacity: 1; }
+.mcard:hover::after  { transform: scaleX(1); }
+.mval {
+    font-family: 'Syne', sans-serif;
+    font-size: 32px;
+    font-weight: 800;
+    line-height: 1.1;
+    background: linear-gradient(135deg, var(--accent) 0%, var(--accent2) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    letter-spacing: -1px;
+}
+.mlbl {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 9px;
+    letter-spacing: 2.5px;
+    text-transform: uppercase;
+    color: var(--txt3);
+    margin-top: 6px;
+}
+
+/* ══════════════════════════════════════════════════════
+   DATAFRAME
+══════════════════════════════════════════════════════ */
+.stDataFrame {
+    border: 1px solid var(--border2) !important;
+    border-radius: var(--radius) !important;
+    overflow: hidden !important;
+    background: var(--bg2) !important;
+}
+.stDataFrame [data-testid="stDataFrameResizable"] {
+    background: var(--bg2) !important;
+}
+
+/* ══════════════════════════════════════════════════════
+   CHECKBOX
+══════════════════════════════════════════════════════ */
+.stCheckbox > label {
+    font-family: 'Inter', sans-serif !important;
+    font-size: 13px !important;
+    color: var(--txt2) !important;
+}
+.stCheckbox > label:hover {
+    color: var(--txt) !important;
+}
+
+/* ══════════════════════════════════════════════════════
+   SPINNER
+══════════════════════════════════════════════════════ */
+.stSpinner > div {
+    border-color: var(--accent) transparent transparent transparent !important;
+}
+
+/* ══════════════════════════════════════════════════════
+   SCROLLBAR
+══════════════════════════════════════════════════════ */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: var(--bg2); }
+::-webkit-scrollbar-thumb {
+    background: var(--bg4);
+    border-radius: 4px;
+    transition: background .2s;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+
+/* ══════════════════════════════════════════════════════
+   DIVIDER
+══════════════════════════════════════════════════════ */
+.div {
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--border2), transparent);
+    margin: 20px 0;
+}
+
+/* ══════════════════════════════════════════════════════
+   ANIMATED BOTTOM BAR
+══════════════════════════════════════════════════════ */
+#pulse-bar {
+    position: fixed; bottom: 0; left: 0; right: 0;
+    height: 2px; z-index: 9999;
+    background: linear-gradient(90deg,
+        #38bdf8, #818cf8, #34d399, #fbbf24, #fb7185, #38bdf8);
+    background-size: 400% auto;
+    animation: barFlow 8s linear infinite;
+}
+@keyframes barFlow {
+    0%   { background-position: 0% center; }
+    100% { background-position: 400% center; }
+}
+
+/* ══════════════════════════════════════════════════════
+   AUTH CARD
+══════════════════════════════════════════════════════ */
+.auth-card {
+    background: var(--surface);
+    border: 1px solid var(--border2);
+    border-radius: 18px;
+    padding: 36px 40px;
+    backdrop-filter: blur(24px);
+    -webkit-backdrop-filter: blur(24px);
+    box-shadow: var(--shadow-lg), 0 0 60px rgba(56,189,248,0.05);
+    animation: authIn .5s cubic-bezier(.16,1,.3,1) both;
+    position: relative;
+    overflow: hidden;
+}
+.auth-card::before {
+    content: "";
+    position: absolute; top: 0; left: 0; right: 0; height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(56,189,248,0.5), transparent);
+}
+@keyframes authIn {
+    from { opacity:0; transform: translateY(24px) scale(.97); }
+    to   { opacity:1; transform: translateY(0) scale(1); }
+}
+
+/* ══════════════════════════════════════════════════════
+   GOOGLE BUTTON
+══════════════════════════════════════════════════════ */
+.g-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    background: var(--bg3);
+    border: 1px solid var(--border2);
+    border-radius: var(--radius-sm);
+    padding: 13px 20px;
+    color: var(--txt2);
+    font-family: 'Inter', sans-serif;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all .25s cubic-bezier(.16,1,.3,1);
+    text-decoration: none;
+    width: 100%;
+    text-align: center;
+    box-shadow: var(--shadow);
+}
+.g-btn:hover {
+    background: var(--bg4);
+    color: var(--txt);
+    border-color: var(--border3);
+    box-shadow: var(--shadow-lg);
+    text-decoration: none;
+    transform: translateY(-1px);
+}
+
+/* ══════════════════════════════════════════════════════
+   HERO ANIMATIONS
+══════════════════════════════════════════════════════ */
+.hero-title { animation: heroIn .7s cubic-bezier(.16,1,.3,1) both; }
+.hero-sub   { animation: heroIn .7s cubic-bezier(.16,1,.3,1) .2s both; }
+.hero-badge { animation: heroIn .7s cubic-bezier(.16,1,.3,1) .05s both; }
+@keyframes heroIn {
+    from { opacity:0; transform: translateY(-16px); }
+    to   { opacity:1; transform: translateY(0); }
+}
+
+/* ══════════════════════════════════════════════════════
+   PLOTLY CHARTS — DARK OVERRIDE
+══════════════════════════════════════════════════════ */
+.js-plotly-plot .plotly, .plot-container {
+    background: transparent !important;
+}
+.js-plotly-plot .plotly .bg {
+    fill: transparent !important;
+}
+
+/* ══════════════════════════════════════════════════════
+   SELECTION HIGHLIGHT
+══════════════════════════════════════════════════════ */
+::selection {
+    background: rgba(56,189,248,0.2);
+    color: var(--txt);
+}
+
+/* ══════════════════════════════════════════════════════
+   FOCUS RING
+══════════════════════════════════════════════════════ */
+*:focus-visible {
+    outline: 2px solid rgba(56,189,248,0.4) !important;
+    outline-offset: 2px !important;
+}
 </style>
-<div id="status-bar"></div>
+<div id="pulse-bar"></div>
 """, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  SESSION STATE
 # ─────────────────────────────────────────────────────────────────────────────
-for key, val in [
-    ("logged_in", False), ("user_info", {}), ("auth_mode", "login"),
-    ("analysis_done", False), ("model_store", None), ("df_store", None),
-    ("results_store", None), ("best_name_store", None), ("metrics_store", None),
-]:
-    if key not in st.session_state:
-        st.session_state[key] = val
+for k, v in [("logged_in",False),("user_info",{}),("auth_mode","login"),
+              ("analysis_done",False),("df_store",None),
+              ("results_store",None),("best_name_store",None),("metrics_store",None),
+              ("used_dl",False),("used_tr",False)]:
+    if k not in st.session_state: st.session_state[k] = v
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  HERO
-# ─────────────────────────────────────────────────────────────────────────────
-st.markdown("""
-<div class="hero-wrap">
-  <div class="hero-badge"><span class="live-dot"></span> Pulse Sentiment AI &nbsp;·&nbsp; Research Edition</div>
-  <div class="hero-title">Read the Nation.<br>Understand Every Voice.</div>
-  <div class="hero-sub">Multilingual · Multi-Platform · Sarcasm-Aware · Adaptive ML + DL + NLP</div>
-</div>
-<div class="h-div"></div>
-""", unsafe_allow_html=True)
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  AUTH
+#  AUTH PAGE
 # ─────────────────────────────────────────────────────────────────────────────
 if not st.session_state.logged_in:
+
+    # Handle Google OAuth callback
     params = st.query_params
     if "code" in params and GOOGLE_CLIENT_ID:
         from auth.auth_manager import exchange_google_code
-        user_info = exchange_google_code(params["code"], GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, REDIRECT_URI)
-        if user_info:
+        ui = exchange_google_code(params["code"], GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, REDIRECT_URI)
+        if ui:
             st.session_state.logged_in = True
-            st.session_state.user_info = {"name": user_info.get("name","Google User"),
-                                           "email": user_info.get("email",""), "role":"user","avatar":"🌐"}
+            st.session_state.user_info = {"name":ui.get("name","Google User"),"email":ui.get("email",""),"role":"user","avatar":"🌐"}
             st.query_params.clear(); st.rerun()
 
-    lc, cc, rc = st.columns([1, 1.4, 1])
+    # ── Hero ──────────────────────────────────────────────────────────────────
+    st.markdown("""
+    <div style="text-align:center;padding:60px 20px 48px;">
+        <div class="hero-badge" style="display:inline-flex;align-items:center;gap:8px;
+             background:rgba(56,189,248,0.07);border:1px solid rgba(56,189,248,0.18);
+             border-radius:100px;padding:6px 18px;font-family:'IBM Plex Mono',monospace;
+             font-size:9.5px;letter-spacing:3px;color:#38bdf8;margin-bottom:24px;
+             text-transform:uppercase;box-shadow:0 0 20px rgba(56,189,248,0.08);">
+            <span style="width:5px;height:5px;border-radius:50%;background:#34d399;
+                  box-shadow:0 0 8px #34d399;animation:livePulse 2s ease infinite;
+                  display:inline-block;"></span>
+            Pulse Sentiment AI
+        </div>
+        <div class="hero-title" style="font-family:'Syne',sans-serif;font-size:clamp(32px,5vw,62px);
+             font-weight:800;line-height:1.05;letter-spacing:-2px;
+             background:linear-gradient(135deg,#e8eef8 0%,#38bdf8 40%,#818cf8 70%,#a78bfa 100%);
+             background-size:200% auto;-webkit-background-clip:text;-webkit-text-fill-color:transparent;
+             background-clip:text;margin-bottom:14px;animation:gradShift 6s ease infinite alternate;">
+            Read the Nation.<br>Understand Every Voice.
+        </div>
+        <div class="hero-sub" style="font-family:'IBM Plex Mono',monospace;font-size:10px;
+             color:#4a6380;letter-spacing:3px;text-transform:uppercase;">
+            Multilingual · Multi-Source · Sarcasm-Aware · Adaptive ML
+        </div>
+    </div>
+    <style>
+    @keyframes livePulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.4;transform:scale(.6)} }
+    @keyframes gradShift { 0%{background-position:0% 50%} 100%{background-position:100% 50%} }
+    </style>
+    """, unsafe_allow_html=True)
+
+    # ── Auth panel ────────────────────────────────────────────────────────────
+    _, cc, _ = st.columns([1, 1.2, 1])
     with cc:
-        st.markdown("<div class='g-panel'>", unsafe_allow_html=True)
+        #st.markdown("<div class='auth-card'>", unsafe_allow_html=True)
+
         col_a, col_b = st.columns(2)
         with col_a:
-            if st.button("Sign In"):  st.session_state.auth_mode = "login"
+            if st.button("Sign In", key="tab_login"):
+                st.session_state.auth_mode = "login"
         with col_b:
-            if st.button("Create Account"): st.session_state.auth_mode = "signup"
-        st.markdown("<div class='h-div'></div>", unsafe_allow_html=True)
+            if st.button("Register", key="tab_register"):
+                st.session_state.auth_mode = "signup"
+
+        st.markdown("<div class='div'></div>", unsafe_allow_html=True)
 
         if st.session_state.auth_mode == "login":
-            st.markdown("""<div style="font-family:'Syne',sans-serif;font-size:22px;font-weight:700;color:#f1f5f9;margin-bottom:4px;">Welcome back</div>
-            <div style="font-family:'DM Mono',monospace;font-size:10px;color:#475569;letter-spacing:2px;text-transform:uppercase;margin-bottom:22px;">Sign in to your account</div>""", unsafe_allow_html=True)
-            uname = st.text_input("Username", placeholder="admin", key="li_user")
-            passw = st.text_input("Password", type="password", placeholder="••••••", key="li_pass")
+            st.markdown("""
+            <div style="margin-bottom:22px;">
+                <div style="font-family:'Syne',sans-serif;font-size:22px;font-weight:700;
+                     color:#e8eef8;margin-bottom:4px;letter-spacing:-.5px;">Welcome back</div>
+                <div style="font-family:'Inter',sans-serif;font-size:13px;color:#4a6380;">
+                     Sign in to access your dashboard</div>
+            </div>""", unsafe_allow_html=True)
+
+            uname = st.text_input("Username", placeholder="Enter username", key="li_user", label_visibility="collapsed")
+            st.markdown('<div style="font-family:IBM Plex Mono,monospace;font-size:9px;letter-spacing:2.5px;text-transform:uppercase;color:#4a6380;margin-bottom:4px;">USERNAME</div>', unsafe_allow_html=True)
+            passw = st.text_input("Password", type="password", placeholder="Enter password", key="li_pass", label_visibility="collapsed")
+            st.markdown('<div style="font-family:IBM Plex Mono,monospace;font-size:9px;letter-spacing:2.5px;text-transform:uppercase;color:#4a6380;margin-bottom:18px;">PASSWORD</div>', unsafe_allow_html=True)
+
             c1, c2 = st.columns(2)
             with c1:
-                if st.button("→  Sign In", key="btn_login"):
-                    ok, msg, info = login(uname, passw)
-                    if ok:
-                        st.session_state.logged_in = True; st.session_state.user_info = info; st.rerun()
-                    else: st.error(f"⟨ {msg} ⟩")
+                if st.button("Sign In →", key="btn_login"):
+                    if uname.strip() and passw.strip():
+                        ok, msg, info = login(uname.strip(), passw)
+                        if ok:
+                            st.session_state.logged_in = True
+                            st.session_state.user_info  = info
+                            st.rerun()
+                        else:
+                            st.error(msg)
+                    else:
+                        st.warning("Please fill in all fields.")
             with c2:
-                if st.button("Forgot Password?", key="btn_forgot"):
-                    st.info("Please contact admin@pulse.ai to reset your password.")
+                if st.button("Forgot Password", key="btn_forgot"):
+                    st.info("Contact admin@pulse.ai")
+
         else:
-            st.markdown("""<div style="font-family:'Syne',sans-serif;font-size:22px;font-weight:700;color:#f1f5f9;margin-bottom:4px;">Create account</div>
-            <div style="font-family:'DM Mono',monospace;font-size:10px;color:#475569;letter-spacing:2px;text-transform:uppercase;margin-bottom:22px;">Join Pulse Sentiment AI</div>""", unsafe_allow_html=True)
-            su_name  = st.text_input("Full Name",  placeholder="Riya Sharma",  key="su_name")
-            su_email = st.text_input("Email",       placeholder="you@email.com", key="su_email")
-            su_user  = st.text_input("Username",    placeholder="riya123",       key="su_user")
-            su_pass  = st.text_input("Password",    type="password", placeholder="min 4 chars", key="su_pass")
+            st.markdown("""
+            <div style="margin-bottom:22px;">
+                <div style="font-family:'Syne',sans-serif;font-size:22px;font-weight:700;
+                     color:#e8eef8;margin-bottom:4px;letter-spacing:-.5px;">Create account</div>
+                <div style="font-family:'Inter',sans-serif;font-size:13px;color:#4a6380;">
+                     Join Pulse Sentiment AI</div>
+            </div>""", unsafe_allow_html=True)
+
+            su_name  = st.text_input("Full Name",  placeholder="Full name",          key="su_name")
+            su_email = st.text_input("Email",       placeholder="Email address",      key="su_email")
+            su_user  = st.text_input("Username",    placeholder="Choose a username",  key="su_user")
+            su_pass  = st.text_input("Password",    type="password", placeholder="Min 4 characters", key="su_pass")
+
             c1, _ = st.columns(2)
             with c1:
-                if st.button("→  Create Account", key="btn_signup"):
-                    ok, msg = signup(su_user, su_pass, su_name, su_email)
-                    if ok: st.success(f"✅ {msg}"); st.session_state.auth_mode="login"; st.rerun()
-                    else:  st.error(f"⟨ {msg} ⟩")
+                if st.button("Create Account →", key="btn_signup"):
+                    if su_user.strip() and su_pass.strip() and su_name.strip():
+                        ok, msg = signup(su_user.strip(), su_pass, su_name.strip(), su_email.strip())
+                        if ok:
+                            st.success("Account created. Sign in now.")
+                            st.session_state.auth_mode = "login"
+                            st.rerun()
+                        else:
+                            st.error(msg)
+                    else:
+                        st.warning("Please fill in all required fields.")
 
-        st.markdown("<div class='h-div'></div>", unsafe_allow_html=True)
         if GOOGLE_CLIENT_ID:
+            st.markdown("<div class='div'></div>", unsafe_allow_html=True)
             g_url = get_google_auth_url(GOOGLE_CLIENT_ID, REDIRECT_URI)
-            st.markdown(f"""<a href="{g_url}" class="google-btn">
-                <svg width="18" height="18" viewBox="0 0 48 48">
+            st.markdown(f"""
+            <a href="{g_url}" class="g-btn">
+                <svg width="16" height="16" viewBox="0 0 48 48">
                   <path fill="#EA4335" d="M24 9.5c3.3 0 5.9 1.4 7.7 2.6l5.7-5.7C33.9 3.5 29.3 1.5 24 1.5 14.8 1.5 7 7.4 3.7 15.5l6.7 5.2C12 15.1 17.5 9.5 24 9.5z"/>
                   <path fill="#4285F4" d="M46.1 24.5c0-1.6-.1-3.1-.4-4.5H24v8.5h12.4c-.5 2.8-2.1 5.2-4.5 6.8l7 5.4c4.1-3.8 6.2-9.4 6.2-16.2z"/>
                   <path fill="#FBBC05" d="M10.4 28.4A14.3 14.3 0 0 1 9.5 24c0-1.5.3-3 .7-4.3L3.7 14.5A22.5 22.5 0 0 0 1.5 24c0 3.6.9 7 2.2 10l6.7-5.6z"/>
@@ -267,111 +812,108 @@ if not st.session_state.logged_in:
                 </svg>
                 Continue with Google
             </a>""", unsafe_allow_html=True)
-        else:
-            st.markdown("""<div style="text-align:center;font-family:'DM Mono',monospace;font-size:10px;color:#334155;letter-spacing:1px;margin-top:8px;">
-                Set GOOGLE_CLIENT_ID in .env to enable Google login</div>""", unsafe_allow_html=True)
+
         st.markdown("</div>", unsafe_allow_html=True)
 
-    st.markdown("""<div style="text-align:center;font-family:'DM Mono',monospace;font-size:10px;color:#1e3a4a;margin-top:8px;letter-spacing:1px;">
-         Demo credentials → username: admin &nbsp;·&nbsp; password: 1234</div>""", unsafe_allow_html=True)
+    st.markdown("""
+    <div style="text-align:center;font-family:'IBM Plex Mono',monospace;font-size:9px;
+         color:#2a3a50;margin-top:14px;letter-spacing:2px;">
+         DEMO &nbsp;·&nbsp; username: admin &nbsp;·&nbsp; password: 1234
+    </div>""", unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  DASHBOARD
 # ─────────────────────────────────────────────────────────────────────────────
 else:
-    user          = st.session_state.user_info
-    uname_display = user.get("name", "User")
-    avatar        = user.get("avatar", "👤")
+    user   = st.session_state.user_info
+    uname  = user.get("name", "User")
+    avatar = user.get("avatar", "👤")
 
-    col_t, col_u = st.columns([5, 1])
+    # ── Top Nav ───────────────────────────────────────────────────────────────
+    col_t, col_u = st.columns([6, 1])
     with col_t:
-        st.markdown(f"""<div style="display:flex;align-items:center;gap:14px;">
-          <div style="width:44px;height:44px;border-radius:50%;background:linear-gradient(135deg,#0ea5e9,#6366f1);
-               display:flex;align-items:center;justify-content:center;font-size:20px;border:2px solid rgba(56,189,248,.3);">{avatar}</div>
-          <div>
-            <div style="font-family:'Syne',sans-serif;font-size:22px;font-weight:700;color:#f1f5f9;letter-spacing:-.3px;">Sentiment Dashboard</div>
-            <div style="font-family:'DM Mono',monospace;font-size:10px;color:#475569;letter-spacing:2px;">WELCOME, {uname_display.upper()} · ACTIVE SESSION</div>
-          </div></div>""", unsafe_allow_html=True)
+        st.markdown(f"""
+        <div style="display:flex;align-items:center;gap:14px;padding:4px 0 22px;">
+            <div style="width:40px;height:40px;border-radius:50%;flex-shrink:0;
+                 background:linear-gradient(135deg,#0ea5e9,#6366f1);
+                 display:flex;align-items:center;justify-content:center;font-size:17px;
+                 box-shadow:0 0 16px rgba(14,165,233,0.3);border:1px solid rgba(56,189,248,0.2);">
+                 {avatar}</div>
+            <div>
+                <div style="font-family:'Syne',sans-serif;font-size:18px;font-weight:700;
+                     color:#e8eef8;line-height:1.2;letter-spacing:-.3px;">Pulse Dashboard</div>
+                <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;
+                     color:#4a6380;letter-spacing:2.5px;">{uname.upper()}</div>
+            </div>
+        </div>""", unsafe_allow_html=True)
     with col_u:
-        if st.button("Disconnect", key="logout"):
-            for k in ["logged_in","user_info","analysis_done","model_store","df_store","results_store","best_name_store","metrics_store"]:
+        st.markdown("<div style='padding-top:6px;'>", unsafe_allow_html=True)
+        if st.button("Sign Out", key="logout"):
+            for k in ["logged_in","user_info","analysis_done","df_store","results_store","best_name_store","metrics_store"]:
                 st.session_state[k] = False if k=="logged_in" else ({} if k=="user_info" else None)
             st.rerun()
+        st.markdown("</div>", unsafe_allow_html=True)
 
-    st.markdown("<div class='h-div'></div>", unsafe_allow_html=True)
+    st.markdown("<div class='div'></div>", unsafe_allow_html=True)
 
     # ── TABS ──────────────────────────────────────────────────────────────────
-    t1, t2, t3, t4, t5 = st.tabs([
-        "📊  Analysis Dashboard",
-        "⚡  Live Probe",
-        "🌍  Multi-Source View",
-        "🌐  Fetch Data",
-        "📄  About & Gaps",
-    ])
+    t1, t2, t3, t4, t5 = st.tabs(["Analysis","Live Probe","Platforms","Data","About"])
 
     # ══════════════════════════════════════════════════════════════════════════
-    #  TAB 1 — ANALYSIS DASHBOARD
+    #  TAB 1 — ANALYSIS
     # ══════════════════════════════════════════════════════════════════════════
     with t1:
-        st.markdown("<div class='g-panel'>", unsafe_allow_html=True)
-        st.markdown("<div class='eyebrow'>⬡ Target Scheme</div>", unsafe_allow_html=True)
+        st.markdown("<div class='card'>", unsafe_allow_html=True)
+        st.markdown("<div class='label'>Select Scheme</div>", unsafe_allow_html=True)
 
-        scheme_options = ["All Schemes (Combined)"] + ALL_SCHEMES
-        scheme = st.selectbox("Government Scheme", scheme_options, label_visibility="collapsed")
-        emoji  = SCHEME_EMOJI.get(scheme, "🇮🇳")
-        color  = "#38bdf8"
-        st.markdown(f"""<div style="display:inline-flex;align-items:center;gap:8px;
-             background:rgba(255,255,255,.04);border:1px solid {color}30;border-radius:100px;
-             padding:6px 16px;margin:8px 0 12px;"><span style="font-size:16px;">{emoji}</span>
-          <span style="font-family:'DM Mono',monospace;font-size:11px;color:{color};letter-spacing:1px;">{scheme}</span></div>""",
-            unsafe_allow_html=True)
+        scheme_options = ["All Schemes"] + ALL_SCHEMES
+        sc1, sc2, sc3 = st.columns([3, 1, 1])
+        with sc1:
+            scheme = st.selectbox("Scheme", scheme_options, label_visibility="collapsed", key="sel_scheme")
+        with sc2:
+            use_dl = st.checkbox("Deep Learning", value=False, key="use_dl")
+        with sc3:
+            use_tr = st.checkbox("Transformers", value=False, key="use_tr")
 
-        # Model options
-        adv_col1, adv_col2 = st.columns(2)
-        with adv_col1:
-            use_dl = st.checkbox("Include Deep Learning models (LSTM, BiLSTM, CNN)", value=False,
-                                  help="Requires TensorFlow. Slower but more powerful.")
-        with adv_col2:
-            use_transformers = st.checkbox("Include Transformer models (BERT, ALBERT)", value=False,
-                                            help="Requires transformers library. Very slow on CPU.")
-
-        rc1, _ = st.columns([1, 4])
-        with rc1:
-            run = st.button("⟶  Run Analysis", key="run_analysis")
+        r1, _ = st.columns([1, 5])
+        with r1:
+            run = st.button("Run Analysis →", key="run_analysis")
         st.markdown("</div>", unsafe_allow_html=True)
 
         if run:
             try:
-                df_raw = pd.read_csv("data/data.csv")
+                pd.read_csv("data/data.csv")
             except FileNotFoundError:
-                st.error("data/data.csv not found. Run: python data/generate_data.py")
+                st.error("Dataset not found. Run: python data/generate_data.py")
                 st.stop()
 
-            if scheme != "All Schemes (Combined)":
-                scheme_key = scheme.split("—")[0].strip().split(" ")[0]
-                df_filt = df_raw[df_raw["Scheme"].str.contains(scheme_key, case=False, na=False)]
-                df_raw  = df_filt if len(df_filt) >= 10 else df_raw
+            with st.spinner("Step 1 / 2 — Preprocessing & labelling…"):
+                df = _cached_preprocess(_get_csv_hash(), scheme)
 
-            with st.spinner("Running full ML + NLP pipeline…"):
-                df = preprocess_dataframe(df_raw)
-                results, best_name = train_models(
-                    df["Cleaned"], df["Sentiment"],
-                    use_dl=use_dl, use_transformers=use_transformers
-                )
-                metrics = results  # already has accuracy, f1, precision, recall, speed_ms, type
+            @st.cache_resource
+            def _cached_train(cleaned_hash, scheme, use_dl, use_tr):
+                df = _cached_preprocess(_get_csv_hash(), scheme)
+                return train_models(df["Cleaned"], df["Sentiment"], use_dl=use_dl, use_transformers=use_tr, df_meta=df)
 
-            st.session_state.df_store         = df
-            st.session_state.results_store    = results
-            st.session_state.best_name_store  = best_name
-            st.session_state.metrics_store    = metrics
-            st.session_state.analysis_done    = True
+            with st.spinner("Step 2 / 2 — Training & benchmarking all models…"):
+                results, best_name = _cached_train(
+                _get_csv_hash(), scheme, use_dl, use_tr
+            )
+            metrics = results
 
-        # ── Display results ───────────────────────────────────────────────────
+            st.session_state.df_store        = df
+            st.session_state.results_store   = results
+            st.session_state.best_name_store = best_name
+            st.session_state.metrics_store   = metrics
+            st.session_state.analysis_done   = True
+            st.session_state.used_dl         = use_dl
+            st.session_state.used_tr         = use_tr
+
         if st.session_state.analysis_done and st.session_state.df_store is not None:
-            df       = st.session_state.df_store
-            results  = st.session_state.results_store
+            df        = st.session_state.df_store
+            results   = st.session_state.results_store
             best_name = st.session_state.best_name_store
-            metrics  = st.session_state.metrics_store
+            metrics   = st.session_state.metrics_store
 
             counts   = df["Sentiment"].value_counts()
             n_pos    = counts.get("Positive", 0)
@@ -380,480 +922,534 @@ else:
             n_sar    = int(df["IsSarcasm"].sum()) if "IsSarcasm" in df.columns else 0
             best_acc = metrics[best_name]["accuracy"] if best_name in metrics else 0
 
-            # ── Metric cards ─────────────────────────────────────────────────
-            mc = st.columns(6)
-            for col, (val, lbl) in zip(mc, [
-                (len(df), "Total Comments"), (n_pos, "Positive"),
-                (n_neg, "Negative"), (n_neu, "Neutral"),
-                (n_sar, "Sarcasm Detected"), (f"{best_acc}%", "Best Accuracy"),
-            ]):
-                col.markdown(f"""<div class="metric-card">
-                  <div class="metric-val">{val}</div>
-                  <div class="metric-lbl">{lbl}</div></div>""", unsafe_allow_html=True)
+            k1,k2,k3,k4,k5,k6 = st.columns(6)
+            for col, val, lbl in zip([k1,k2,k3,k4,k5,k6],[
+                len(df), n_pos, n_neg, n_neu, n_sar, f"{best_acc}%"
+            ],["Comments","Positive","Negative","Neutral","Sarcasm","Best Accuracy"]):
+                col.markdown(f"""<div class="mcard">
+                    <div class="mval">{val}</div>
+                    <div class="mlbl">{lbl}</div>
+                </div>""", unsafe_allow_html=True)
 
-            st.markdown("<div class='h-div'></div>", unsafe_allow_html=True)
+            st.markdown("<div class='div'></div>", unsafe_allow_html=True)
 
-            # ── Charts row 1 ─────────────────────────────────────────────────
-            ch1, ch2 = st.columns(2)
-            with ch1:
-                st.markdown("<div class='g-panel'>", unsafe_allow_html=True)
-                st.markdown("<div class='eyebrow'>Sentiment Distribution</div>", unsafe_allow_html=True)
-                fig_pie = px.pie(values=counts.values, names=counts.index,
+            c1, c2 = st.columns(2)
+            with c1:
+                st.markdown("<div class='card'>", unsafe_allow_html=True)
+                st.markdown("<div class='label'>Sentiment Distribution</div>", unsafe_allow_html=True)
+                fig_pie = px.pie(values=counts.values, names=counts.index, hole=0.6,
                     color=counts.index,
-                    color_discrete_map={"Positive":"#34d399","Negative":"#f87171","Neutral":"#fbbf24","Sarcasm":"#818cf8"},
-                    hole=0.55)
-                fig_pie.update_traces(textfont_color="white", textfont_size=13)
+                    color_discrete_map={"Positive":"#34d399","Negative":"#fb7185","Neutral":"#fbbf24","Sarcasm":"#a78bfa"})
+                fig_pie.update_traces(textfont_color="white", textfont_size=12)
                 fig_pie.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                    font_color="#94a3b8", legend=dict(bgcolor="rgba(0,0,0,0)", font_color="#94a3b8"),
-                    margin=dict(t=10,b=10,l=10,r=10), height=320)
-                st.plotly_chart(fig_pie, use_container_width=True)
+                    font_color="#8fa8c8", legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color="#8fa8c8")),
+                    margin=dict(t=10,b=10,l=10,r=10), height=300)
+                st.plotly_chart(fig_pie, use_container_width=True, key="fig_pie")
                 st.markdown("</div>", unsafe_allow_html=True)
 
-            with ch2:
-                st.markdown("<div class='g-panel'>", unsafe_allow_html=True)
-                st.markdown("<div class='eyebrow'>Source-wise Breakdown (Gap 2 ✅)</div>", unsafe_allow_html=True)
+            with c2:
+                st.markdown("<div class='card'>", unsafe_allow_html=True)
+                st.markdown("<div class='label'>By Platform</div>", unsafe_allow_html=True)
                 if "Source" in df.columns:
-                    src_sent = df.groupby(["Source","Sentiment"]).size().reset_index(name="Count")
-                    fig_bar = px.bar(src_sent, x="Source", y="Count", color="Sentiment",
-                        color_discrete_map={"Positive":"#34d399","Negative":"#f87171","Neutral":"#fbbf24","Sarcasm":"#818cf8"},
-                        barmode="group")
+                    ss = df.groupby(["Source","Sentiment"]).size().reset_index(name="Count")
+                    fig_bar = px.bar(ss, x="Source", y="Count", color="Sentiment", barmode="group",
+                        color_discrete_map={"Positive":"#34d399","Negative":"#fb7185","Neutral":"#fbbf24","Sarcasm":"#a78bfa"})
                     fig_bar.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                        font_color="#94a3b8", legend=dict(bgcolor="rgba(0,0,0,0)"),
-                        xaxis=dict(gridcolor="rgba(255,255,255,.05)"),
-                        yaxis=dict(gridcolor="rgba(255,255,255,.05)"),
-                        margin=dict(t=10,b=10,l=10,r=10), height=320)
-                    st.plotly_chart(fig_bar, use_container_width=True)
+                        font_color="#8fa8c8", legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color="#8fa8c8")),
+                        xaxis=dict(gridcolor="rgba(56,189,248,0.06)", color="#4a6380"),
+                        yaxis=dict(gridcolor="rgba(56,189,248,0.06)", color="#4a6380"),
+                        margin=dict(t=10,b=10,l=10,r=10), height=300)
+                    st.plotly_chart(fig_bar, use_container_width=True, key="fig_bar")
                 st.markdown("</div>", unsafe_allow_html=True)
 
-            # ── Charts row 2 ─────────────────────────────────────────────────
-            ch3, ch4 = st.columns(2)
-            with ch3:
-                st.markdown("<div class='g-panel'>", unsafe_allow_html=True)
-                st.markdown("<div class='eyebrow'>Language Detection (Gap 1 ✅)</div>", unsafe_allow_html=True)
+            c3, c4 = st.columns(2)
+            with c3:
+                st.markdown("<div class='card'>", unsafe_allow_html=True)
+                st.markdown("<div class='label'>Language Breakdown</div>", unsafe_allow_html=True)
                 if "Lang" in df.columns:
-                    lang_counts = df["Lang"].value_counts()
-                    lang_labels = {"en":"English","hi":"Hindi/Hinglish","ta":"Tamil","bn":"Bengali","te":"Telugu"}
-                    lang_display = lang_counts.rename(index=lambda x: lang_labels.get(x, x.upper()))
-                    fig_lang = px.bar(x=lang_display.index, y=lang_display.values,
-                        color=lang_display.values,
-                        color_continuous_scale=["#0ea5e9","#6366f1","#34d399"],
-                        labels={"x":"Language","y":"Count","color":"Count"})
+                    lc = df["Lang"].value_counts()
+                    lmap = {"en":"English","hi":"Hindi","hinglish":"Hinglish","ta":"Tamil","te":"Telugu","bn":"Bengali"}
+                    lc = lc.rename(index=lambda x: lmap.get(x, x.upper()))
+                    fig_lang = px.bar(x=lc.index, y=lc.values, color=lc.values,
+                        color_continuous_scale=["#38bdf8","#818cf8","#34d399"],
+                        labels={"x":"","y":"Count","color":"Count"})
                     fig_lang.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                        font_color="#94a3b8", showlegend=False,
-                        xaxis=dict(gridcolor="rgba(255,255,255,.04)"),
-                        yaxis=dict(gridcolor="rgba(255,255,255,.04)"),
-                        margin=dict(t=10,b=10,l=10,r=10), height=280)
-                    st.plotly_chart(fig_lang, use_container_width=True)
+                        font_color="#8fa8c8", showlegend=False,
+                        xaxis=dict(gridcolor="rgba(56,189,248,0.06)", color="#4a6380"),
+                        yaxis=dict(gridcolor="rgba(56,189,248,0.06)", color="#4a6380"),
+                        margin=dict(t=10,b=10,l=10,r=10), height=260)
+                    st.plotly_chart(fig_lang, use_container_width=True, key="fig_lang")
                 st.markdown("</div>", unsafe_allow_html=True)
 
-            with ch4:
-                st.markdown("<div class='g-panel'>", unsafe_allow_html=True)
-                st.markdown("<div class='eyebrow'>Sarcasm Detection (Gap 5 ✅)</div>", unsafe_allow_html=True)
-                sar_data = pd.DataFrame({"Type":["Non-Sarcastic","Sarcastic"],
-                                          "Count":[len(df)-n_sar, n_sar]})
-                fig_sar = px.bar(sar_data, x="Type", y="Count", color="Type",
-                    color_discrete_map={"Non-Sarcastic":"#38bdf8","Sarcastic":"#f87171"})
+            with c4:
+                st.markdown("<div class='card'>", unsafe_allow_html=True)
+                st.markdown("<div class='label'>Sarcasm Detection</div>", unsafe_allow_html=True)
+                sd = pd.DataFrame({"Type":["Genuine","Sarcastic"],"Count":[len(df)-n_sar, n_sar]})
+                fig_sar = px.bar(sd, x="Type", y="Count", color="Type",
+                    color_discrete_map={"Genuine":"#38bdf8","Sarcastic":"#fb7185"})
                 fig_sar.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                    font_color="#94a3b8", showlegend=False,
-                    xaxis=dict(gridcolor="rgba(255,255,255,.04)"),
-                    yaxis=dict(gridcolor="rgba(255,255,255,.04)"),
-                    margin=dict(t=10,b=10,l=10,r=10), height=280)
-                st.plotly_chart(fig_sar, use_container_width=True)
+                    font_color="#8fa8c8", showlegend=False,
+                    xaxis=dict(gridcolor="rgba(56,189,248,0.06)", color="#4a6380"),
+                    yaxis=dict(gridcolor="rgba(56,189,248,0.06)", color="#4a6380"),
+                    margin=dict(t=10,b=10,l=10,r=10), height=260)
+                st.plotly_chart(fig_sar, use_container_width=True, key="fig_sar")
                 st.markdown("</div>", unsafe_allow_html=True)
 
-            # ── Platform Comparison Heatmap ───────────────────────────────────
             if "Source" in df.columns and df["Source"].nunique() > 1:
-                st.markdown("<div class='g-panel'>", unsafe_allow_html=True)
-                st.markdown("<div class='eyebrow'>Platform Sentiment Comparison (Gap 2 ✅)</div>", unsafe_allow_html=True)
-                sources    = df["Source"].unique().tolist()
-                sentiments = ["Positive","Negative","Neutral"]
-                z_data, text_data = [], []
-                for src in sources:
-                    sub = df[df["Source"]==src]["Sentiment"].value_counts(normalize=True).mul(100)
-                    row_z = [round(sub.get(s,0),1) for s in sentiments]
-                    row_t = [f"{v}%" for v in row_z]
-                    z_data.append(row_z); text_data.append(row_t)
-                fig_heat = go.Figure(go.Heatmap(
-                    z=z_data, x=sentiments, y=sources,
-                    text=text_data, texttemplate="%{text}",
-                    colorscale=[[0,"#0f172a"],[0.5,"#0ea5e9"],[1,"#34d399"]], showscale=True))
+                st.markdown("<div class='card'>", unsafe_allow_html=True)
+                st.markdown("<div class='label'>Platform × Sentiment Heatmap</div>", unsafe_allow_html=True)
+                srcs  = df["Source"].unique().tolist()
+                sents = ["Positive","Negative","Neutral"]
+                z, t  = [], []
+                for s in srcs:
+                    sub = df[df["Source"]==s]["Sentiment"].value_counts(normalize=True).mul(100)
+                    row = [round(sub.get(x,0),1) for x in sents]
+                    z.append(row); t.append([f"{v}%" for v in row])
+                fig_heat = go.Figure(go.Heatmap(z=z, x=sents, y=srcs, text=t, texttemplate="%{text}",
+                    colorscale=[[0,"#080c14"],[0.4,"#0ea5e9"],[1,"#34d399"]], showscale=True))
                 fig_heat.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                    font_color="#94a3b8", margin=dict(t=10,b=10,l=10,r=10), height=300)
-                st.plotly_chart(fig_heat, use_container_width=True)
+                    font_color="#8fa8c8", margin=dict(t=10,b=10,l=10,r=10), height=280)
+                st.plotly_chart(fig_heat, use_container_width=True, key="fig_heat")
                 st.markdown("</div>", unsafe_allow_html=True)
 
-            # ── Model Comparison ─────────────────────────────────────────────
-            st.markdown("<div class='g-panel'>", unsafe_allow_html=True)
-            st.markdown("<div class='eyebrow'>Adaptive Model Selection (Gap 3 ✅)</div>", unsafe_allow_html=True)
-            st.markdown("""<div style="font-family:'Outfit',sans-serif;font-size:13px;color:#64748b;margin-bottom:18px;">
-            All models trained and benchmarked. Best selected by accuracy — ties broken by speed. TextBlob, VADER, LSTM, ALBERT included.</div>""",
-                unsafe_allow_html=True)
+            # ── Model Benchmarks ──────────────────────────────────────────────
+            st.markdown("<div class='card'>", unsafe_allow_html=True)
+            st.markdown("<div class='label'>Model Benchmarks</div>", unsafe_allow_html=True)
 
-            # ── KEY FIX: build ONE html string, render once ───────────────────
-            model_html = ""
-            for mname, mdata in sorted(metrics.items(), key=lambda x: -x[1].get("accuracy",0)):
-                if not mdata.get("available", True) and mdata.get("accuracy",0) == 0:
+            ran_models    = {k:v for k,v in metrics.items() if v.get("accuracy",0) > 0}
+            failed_models = {k:v for k,v in metrics.items() if v.get("accuracy",0) == 0 and not v.get("available",True)}
+
+            used_dl = st.session_state.get("used_dl", False)
+            used_tr = st.session_state.get("used_tr", False)
+            if used_dl or used_tr:
+                libs = []
+                if used_dl: libs.append("TensorFlow (LSTM · BiLSTM · CNN)")
+                if used_tr: libs.append("Transformers (ALBERT · DistilBERT · mBERT)")
+                not_installed = [l for l in libs if l]
+                if failed_models:
+                    st.info(f"Some models could not run — library may not be installed: {' · '.join(not_installed)}. Install with: pip install tensorflow transformers")
+
+            mhtml = ""
+            for mn, md in sorted(metrics.items(), key=lambda x: -x[1].get("accuracy", 0)):
+                acc = md.get("accuracy", 0)
+                if acc == 0 and not md.get("available", True):
                     continue
-                is_best    = mname == best_name
-                mtype      = mdata.get("type", "Classical ML")
-                type_color = MODEL_TYPE_COLORS.get(mtype, "#38bdf8")
-                border     = f"border-color:rgba(52,211,153,.4);background:rgba(52,211,153,.05);" if is_best else ""
-                badge      = f"<span style='background:rgba(52,211,153,.15);border:1px solid rgba(52,211,153,.3);color:#34d399;border-radius:100px;padding:3px 12px;font-family:DM Mono,monospace;font-size:10px;letter-spacing:1.5px;'>★ BEST</span>" if is_best else ""
-                speed_text = f"{mdata.get('speed_ms',0):.0f}ms" if mdata.get("speed_ms",0) > 0 else "—"
-                model_html += f"""
-                <div style="display:flex;align-items:center;justify-content:space-between;
-                     background:rgba(255,255,255,.025);border:1px solid rgba(255,255,255,.06);
-                     border-radius:12px;padding:14px 20px;margin-bottom:10px;{border}transition:all .2s;">
-                  <div>
-                    <div style="display:flex;align-items:center;gap:10px;">
-                      <span style="font-family:'DM Mono',monospace;font-size:13px;color:#94a3b8;">{mname}</span>
-                      <span style="background:{type_color}18;border:1px solid {type_color}30;color:{type_color};
-                           border-radius:100px;padding:2px 10px;font-family:'DM Mono',monospace;font-size:9px;
-                           letter-spacing:1px;">{mtype}</span>
-                    </div>
-                    <div style="font-family:'DM Mono',monospace;font-size:10px;color:#334155;margin-top:4px;">
-                      F1: {mdata.get('f1',0)}% &nbsp;·&nbsp; Precision: {mdata.get('precision',0)}% &nbsp;·&nbsp;
-                      Recall: {mdata.get('recall',0)}% &nbsp;·&nbsp; Speed: {speed_text}
-                    </div>
-                  </div>
-                  <div style="display:flex;align-items:center;gap:12px;">
-                    {badge}
-                    <div style="font-family:'Syne',sans-serif;font-size:22px;font-weight:700;color:#38bdf8;">{mdata.get('accuracy',0)}%</div>
-                  </div>
-                </div>"""
-            st.markdown(model_html, unsafe_allow_html=True)
+                ib = mn == best_name
+                mt = md.get("type", "Classical ML")
+                TYPE_COLORS_HEX = {
+                    "Classical ML":     "#38bdf8",
+                    "NLP/Lexicon":      "#34d399",
+                    "Deep Learning":    "#818cf8",
+                    "Transformer/BERT": "#fbbf24",
+                }
+                tc  = TYPE_COLORS_HEX.get(mt, "#38bdf8")
+                spd = f"{md.get('speed_ms',0):.0f}ms" if md.get("speed_ms",0) > 0 else "—"
 
-            # Bar chart
+                if acc == 0:
+                    mhtml += (
+                        f'<div style="display:flex;align-items:center;justify-content:space-between;'
+                        f'background:#0d1420;border:1px solid rgba(56,189,248,0.06);'
+                        f'border-radius:10px;padding:13px 18px;margin-bottom:8px;opacity:0.45;">'
+                        f'<div>'
+                        f'<div style="display:flex;align-items:center;gap:8px;margin-bottom:3px;">'
+                        f'<span style="font-family:Syne,sans-serif;font-size:14px;font-weight:600;color:#4a6380;">{mn}</span>'
+                        f'<span style="background:{tc}15;border:1px solid {tc}25;color:{tc};'
+                        f'border-radius:100px;padding:1px 9px;font-family:IBM Plex Mono,monospace;'
+                        f'font-size:9px;letter-spacing:1px;">{mt}</span>'
+                        f'<span style="background:rgba(251,113,133,0.08);border:1px solid rgba(251,113,133,0.2);'
+                        f'color:#fb7185;border-radius:100px;padding:1px 9px;'
+                        f'font-family:IBM Plex Mono,monospace;font-size:9px;">NOT INSTALLED</span>'
+                        f'</div>'
+                        f'<div style="font-family:IBM Plex Mono,monospace;font-size:10px;color:#2a3a50;">'
+                        f'Library not available — install to enable</div>'
+                        f'</div>'
+                        f'<div style="font-size:18px;font-weight:700;color:#2a3a50;font-family:Syne,sans-serif;">—</div>'
+                        f'</div>'
+                    )
+                    continue
+
+                bdr = ("border-color:rgba(52,211,153,0.3);background:rgba(52,211,153,0.03);"
+                       if ib else "border-color:rgba(56,189,248,0.1);background:#0d1420;")
+                bdg = ("<span style='background:rgba(52,211,153,0.1);border:1px solid rgba(52,211,153,0.25);"
+                       "color:#34d399;border-radius:100px;padding:2px 10px;"
+                       "font-family:IBM Plex Mono,monospace;font-size:9px;letter-spacing:1px;'>BEST</span>"
+                       if ib else "")
+
+                row_acc  = acc
+                row_f1   = md.get('f1', 0)
+                row_prec = md.get('precision', 0)
+                row_rec  = md.get('recall', 0)
+
+                mhtml += (
+                    f'<div style="display:flex;align-items:center;justify-content:space-between;'
+                    f'border:1px solid;border-radius:10px;padding:14px 20px;margin-bottom:8px;'
+                    f'{bdr}transition:all .25s;cursor:default;">'
+                    f'<div>'
+                    f'<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">'
+                    f'<span style="font-family:Syne,sans-serif;font-size:14px;font-weight:700;color:#e8eef8;">{mn}</span>'
+                    f'<span style="background:{tc}12;border:1px solid {tc}22;color:{tc};'
+                    f'border-radius:100px;padding:2px 10px;font-family:IBM Plex Mono,monospace;'
+                    f'font-size:8.5px;letter-spacing:1px;">{mt}</span>'
+                    f'</div>'
+                    f'<div style="font-family:IBM Plex Mono,monospace;font-size:9.5px;color:#4a6380;">'
+                    f'F1 {row_f1}% &nbsp;&middot;&nbsp; Precision {row_prec}% &nbsp;&middot;&nbsp; Recall {row_rec}% &nbsp;&middot;&nbsp; {spd}'
+                    f'</div>'
+                    f'</div>'
+                    f'<div style="display:flex;align-items:center;gap:10px;">'
+                    f'{bdg}'
+                    f'<div style="font-family:Syne,sans-serif;font-size:24px;font-weight:800;'
+                    f'background:linear-gradient(135deg,#38bdf8,#818cf8);'
+                    f'-webkit-background-clip:text;-webkit-text-fill-color:transparent;'
+                    f'background-clip:text;">{row_acc}%</div>'
+                    f'</div>'
+                    f'</div>'
+                )
+
+            st.markdown(mhtml, unsafe_allow_html=True)
+
             avail = {k:v for k,v in metrics.items() if v.get("available",True) and v.get("accuracy",0)>0}
             if avail:
                 fig_cmp = px.bar(x=list(avail.keys()), y=[v["accuracy"] for v in avail.values()],
                     color=[v.get("type","Classical ML") for v in avail.values()],
-                    color_discrete_map=MODEL_TYPE_COLORS,
-                    labels={"x":"Model","y":"Accuracy (%)","color":"Type"})
+                    color_discrete_map={
+                        "Classical ML":"#38bdf8","NLP/Lexicon":"#34d399",
+                        "Deep Learning":"#818cf8","Transformer/BERT":"#fbbf24"
+                    }, labels={"x":"","y":"Accuracy (%)","color":"Type"})
                 fig_cmp.add_hline(y=max(v["accuracy"] for v in avail.values()),
                     line_dash="dot", line_color="#34d399", opacity=0.5)
                 fig_cmp.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                    font_color="#94a3b8",
-                    legend=dict(bgcolor="rgba(0,0,0,0)", font_color="#94a3b8"),
-                    xaxis=dict(gridcolor="rgba(255,255,255,.04)"),
-                    yaxis=dict(gridcolor="rgba(255,255,255,.04)", range=[0,105]),
-                    margin=dict(t=20,b=10,l=10,r=10), height=300)
-                st.plotly_chart(fig_cmp, use_container_width=True)
+                    font_color="#8fa8c8", legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color="#8fa8c8")),
+                    xaxis=dict(gridcolor="rgba(56,189,248,0.06)", color="#4a6380"),
+                    yaxis=dict(gridcolor="rgba(56,189,248,0.06)", color="#4a6380", range=[0,108]),
+                    margin=dict(t=16,b=10,l=10,r=10), height=280)
+                st.plotly_chart(fig_cmp, use_container_width=True, key="fig_cmp")
             st.markdown("</div>", unsafe_allow_html=True)
 
-            # ── Data preview ─────────────────────────────────────────────────
-            st.markdown("<div class='g-panel'>", unsafe_allow_html=True)
-            st.markdown("<div class='eyebrow'>Processed Dataset Preview</div>", unsafe_allow_html=True)
-            show_cols = [c for c in ["Scheme","Source","Lang","Comment","Translated","IsSarcasm","Sentiment"] if c in df.columns]
-            st.dataframe(df[show_cols].head(50), use_container_width=True, height=320)
+            st.markdown("<div class='card'>", unsafe_allow_html=True)
+            st.markdown("<div class='label'>Dataset Preview</div>", unsafe_allow_html=True)
+            show = [c for c in ["Scheme","Source","Lang","Comment","Translated","IsSarcasm","Sentiment"] if c in df.columns]
+            st.dataframe(df[show].head(50), use_container_width=True, height=300)
             st.markdown("</div>", unsafe_allow_html=True)
 
         elif not st.session_state.analysis_done:
-            st.markdown("""<div style="text-align:center;padding:60px 20px;color:#334155;
-                font-family:'DM Mono',monospace;font-size:12px;letter-spacing:2px;">
-                SELECT A SCHEME AND CLICK RUN ANALYSIS TO BEGIN</div>""", unsafe_allow_html=True)
+            st.markdown("""
+            <div style="text-align:center;padding:80px 20px;">
+                <div style="font-size:36px;margin-bottom:14px;opacity:.4;">📊</div>
+                <div style="font-family:'Syne',sans-serif;font-size:17px;font-weight:700;
+                     color:#8fa8c8;margin-bottom:8px;">Select a scheme and run analysis</div>
+                <div style="font-family:'Inter',sans-serif;font-size:13px;color:#4a6380;">
+                     Choose from 40 government schemes and click Run Analysis to begin</div>
+            </div>""", unsafe_allow_html=True)
 
     # ══════════════════════════════════════════════════════════════════════════
     #  TAB 2 — LIVE PROBE
     # ══════════════════════════════════════════════════════════════════════════
     with t2:
-        st.markdown("<div class='g-panel'>", unsafe_allow_html=True)
-        st.markdown("<div class='eyebrow'>⚡ Live Sentiment Probe — All 5 Gaps Active</div>", unsafe_allow_html=True)
-        st.markdown("""<div style="font-family:'Outfit',sans-serif;font-size:14px;color:#64748b;margin-bottom:20px;line-height:1.7;">
-        Enter any comment in <strong style="color:#94a3b8;">any language</strong> (English, Hindi, Tamil, Hinglish…).
-        System detects language, translates, runs sarcasm detection, and classifies sentiment.</div>""", unsafe_allow_html=True)
+        st.markdown("<div class='card'>", unsafe_allow_html=True)
+        st.markdown("<div class='label'>Live Sentiment Analysis</div>", unsafe_allow_html=True)
 
-        comment_input = st.text_area("Enter comment",
-            placeholder='Try: "यह योजना बहुत अच्छी है!" or "Great scheme... as if it ever works 🙄"',
-            height=130, label_visibility="collapsed", key="live_comment")
-
-        pc, _ = st.columns([1,4])
-        with pc:
-            probe_btn = st.button("⟶  Analyse Now", key="btn_probe")
-
-        if probe_btn and comment_input.strip():
-            lang       = detect_language(comment_input)
-            translated = translate_to_english(comment_input, lang) if lang != "en" else comment_input
-            cleaned    = clean_text(translated)
-            result     = predict_live_with_confidence(comment_input, cleaned)
-
-            sentiment  = result["sentiment"]
-            confidence = result["confidence"]
-            sarcasm    = result["is_sarcastic"]
-            sarc_score = result["sarcasm_score"]
-            model_used = result["model_used"]
-
-            color_map = {"Positive":"#34d399","Negative":"#f87171","Neutral":"#fbbf24","Unknown":"#94a3b8"}
-            icon_map  = {"Positive":"🟢","Negative":"🔴","Neutral":"🟡","Unknown":"⚪"}
-            clr  = color_map.get(sentiment, "#94a3b8")
-            icon = icon_map.get(sentiment, "⚪")
-
-            st.markdown(f"""<div style="margin:20px 0;padding:24px 30px;border-radius:18px;
-                 background:{clr}0d;border:1.5px solid {clr}40;text-align:center;">
-              <div style="font-family:'DM Mono',monospace;font-size:10px;color:#64748b;letter-spacing:3px;text-transform:uppercase;margin-bottom:8px;">
-                   Sentiment Classification Result</div>
-              <div style="font-family:'Syne',sans-serif;font-size:36px;font-weight:800;color:{clr};letter-spacing:1px;">{icon} &nbsp; {sentiment.upper()}</div>
-              <div style="font-family:'DM Mono',monospace;font-size:12px;color:#475569;margin-top:8px;">
-                   Confidence: {confidence}% &nbsp;·&nbsp; Model: {model_used}</div>
+        import modules.model as _model_module
+        if st.session_state.get("analysis_done") and st.session_state.get("best_name_store"):
+            st.markdown(f"""
+            <div style="display:inline-flex;align-items:center;gap:8px;
+                 background:rgba(52,211,153,0.07);border:1px solid rgba(52,211,153,0.2);
+                 border-radius:8px;padding:7px 16px;margin-bottom:16px;">
+              <span style="width:6px;height:6px;border-radius:50%;background:#34d399;
+                    box-shadow:0 0 8px #34d399;display:inline-block;
+                    animation:livePulse 2s ease infinite;"></span>
+              <span style="font-family:'IBM Plex Mono',monospace;font-size:9.5px;
+                    color:#34d399;letter-spacing:2px;">
+                ACTIVE MODEL: {st.session_state.best_name_store.upper()}
+              </span>
+            </div>
+            <style>@keyframes livePulse{{0%,100%{{opacity:1;transform:scale(1)}}50%{{opacity:.4;transform:scale(.6)}}}}</style>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown("""
+            <div style="display:inline-flex;align-items:center;gap:8px;
+                 background:rgba(251,191,36,0.07);border:1px solid rgba(251,191,36,0.2);
+                 border-radius:8px;padding:7px 16px;margin-bottom:16px;">
+              <span style="width:6px;height:6px;border-radius:50%;background:#fbbf24;
+                    display:inline-block;"></span>
+              <span style="font-family:'IBM Plex Mono',monospace;font-size:9.5px;
+                    color:#fbbf24;letter-spacing:2px;">
+                USING FALLBACK — Run Analysis first to activate best ML model
+              </span>
             </div>""", unsafe_allow_html=True)
 
-            dc1, dc2, dc3, dc4, dc5 = st.columns(5)
-            for col, (lbl, val, c) in zip([dc1,dc2,dc3,dc4,dc5], [
-                ("Language", lang.upper(), "#38bdf8"),
-                ("Sarcasm", f"⚠️ YES ({sarc_score}%)" if sarcasm else f"No ({sarc_score}%)", "#f87171" if sarcasm else "#34d399"),
-                ("Confidence", f"{confidence}%", "#818cf8"),
-                ("Model Type", result.get("model_used","—")[:15], "#f59e0b"),
-                ("Gap 5", "Sarcasm ✅" if sarcasm else "Clean ✅", "#34d399"),
-            ]):
-                col.markdown(f"""<div class="metric-card">
-                  <div style="font-family:'Syne',sans-serif;font-size:15px;font-weight:700;color:{c};">{val}</div>
-                  <div class="metric-lbl">{lbl}</div></div>""", unsafe_allow_html=True)
+        comment_input = st.text_area(
+            "Comment", height=120, label_visibility="collapsed", key="live_comment",
+            placeholder='Enter a comment in any language — English, Hindi, Tamil, Hinglish…'
+        )
 
-            if lang != "en" and translated != comment_input:
-                st.markdown(f"""<div style="margin-top:16px;background:rgba(56,189,248,.05);
-                     border:1px solid rgba(56,189,248,.15);border-radius:14px;padding:16px 20px;">
-                  <div style="font-family:'DM Mono',monospace;font-size:10px;color:#38bdf8;letter-spacing:2px;text-transform:uppercase;margin-bottom:6px;">Auto-Translated (Gap 1 ✅)</div>
-                  <div style="font-family:'Outfit',sans-serif;font-size:14px;color:#94a3b8;font-style:italic;">"{translated}"</div>
+        p1, _ = st.columns([1, 5])
+        with p1:
+            probe = st.button("Analyse →", key="btn_probe")
+
+        if probe and comment_input.strip():
+            result     = predict_live_with_confidence(comment_input.strip())
+            sent       = result["sentiment"]
+            conf       = result["confidence"]
+            sarc       = result["is_sarcastic"]
+            ss         = result["sarcasm_score"]
+            model_used = result["model_used"]
+            lang       = result.get("language", "en")
+            translated = result.get("translated", "")
+
+            cmap = {"Positive":"#34d399","Negative":"#fb7185","Neutral":"#fbbf24"}
+            imap = {"Positive":"↑","Negative":"↓","Neutral":"→"}
+            clr  = cmap.get(sent, "#8fa8c8")
+            ico  = imap.get(sent, "·")
+
+            st.markdown(f"""
+            <div style="margin:20px 0;padding:32px;border-radius:14px;
+                 background:linear-gradient(135deg,rgba(13,20,32,0.9),rgba(18,26,40,0.7));
+                 border:1px solid {clr}30;text-align:center;
+                 box-shadow:0 0 30px {clr}10;">
+              <div style="font-family:'Syne',sans-serif;font-size:42px;font-weight:800;
+                   color:{clr};letter-spacing:-1.5px;margin-bottom:10px;
+                   text-shadow:0 0 30px {clr}40;">
+                {ico} {sent}
+              </div>
+              <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;
+                   color:#4a6380;letter-spacing:2px;">
+                {conf}% CONFIDENCE &nbsp;·&nbsp; {model_used[:32]}
+              </div>
+            </div>""", unsafe_allow_html=True)
+
+            d1, d2, d3, d4   = st.columns(4)
+            lang_display = lang.upper() if lang else "EN"
+            sarc_display = f"Detected ({ss}%)" if sarc else f"None ({ss}%)"
+            sarc_color   = "#fb7185" if sarc else "#34d399"
+
+            for col, (lbl, val, c) in zip([d1,d2,d3,d4],[
+                ("Language",   lang_display,               "#38bdf8"),
+                ("Sarcasm",    sarc_display,               sarc_color),
+                ("Confidence", f"{conf}%",                 "#a78bfa"),
+                ("Signal",     "Sarcasm ✓" if sarc else "Clean ✓", "#34d399"),
+            ]):
+                col.markdown(f"""<div class="mcard">
+                    <div style="font-size:14px;font-weight:600;color:{c};
+                         font-family:'Inter',sans-serif;margin-bottom:5px;">{val}</div>
+                    <div class="mlbl">{lbl}</div>
                 </div>""", unsafe_allow_html=True)
 
-        elif probe_btn:
-            st.warning("⟨ Please enter some text to analyse ⟩")
+            if translated and translated.strip() and translated.strip().lower() != comment_input.strip().lower():
+                st.markdown(f"""
+                <div style="margin-top:14px;background:rgba(56,189,248,0.04);
+                     border:1px solid rgba(56,189,248,0.12);border-radius:10px;padding:16px 20px;">
+                  <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:#38bdf8;
+                       letter-spacing:2.5px;text-transform:uppercase;margin-bottom:7px;">
+                       Translated ({lang.upper()} → EN)</div>
+                  <div style="font-family:'Inter',sans-serif;font-size:14px;
+                       color:#8fa8c8;font-style:italic;">"{translated}"</div>
+                </div>""", unsafe_allow_html=True)
+
+        elif probe:
+            st.warning("Enter some text to analyse.")
         st.markdown("</div>", unsafe_allow_html=True)
 
-        # Examples
-        st.markdown("<div class='g-panel'>", unsafe_allow_html=True)
-        st.markdown("<div class='eyebrow'>Test Examples</div>", unsafe_allow_html=True)
-        examples = [
-            ("Positive · English",  "The PMAY scheme has truly helped millions of rural families get proper housing."),
-            ("Negative · Hindi",    "यह योजना सिर्फ नाम की है, जमीन पर कुछ नहीं होता।"),
-            ("Neutral · Hinglish",  "Scheme ke baare mein suna hai, apply nahi kiya abhi."),
-            ("Sarcasm 🙄",           "Oh wow, another GREAT government scheme that will DEFINITELY help everyone! 🙄"),
-            ("Sarcasm 😒",           "Sure sure, the PM Kisan money definitely reached the farmers 😒"),
+        st.markdown("<div class='card'>", unsafe_allow_html=True)
+        st.markdown("<div class='label'>Quick Test Examples</div>", unsafe_allow_html=True)
+        exs = [
+            ("Positive",  "The PMAY scheme has genuinely helped millions of rural families."),
+            ("Negative",  "यह योजना सिर्फ नाम की है, जमीन पर कुछ नहीं होता।"),
+            ("Neutral",   "Scheme ke baare mein suna hai, apply nahi kiya abhi."),
+            ("Sarcasm",   "Oh wow, another GREAT scheme that will DEFINITELY help everyone! 🙄"),
+            ("Sarcasm",   "Sure sure, PM Kisan money definitely reached the farmers 😒"),
         ]
-        ex_cols = st.columns(len(examples))
-        for col, (lbl, txt) in zip(ex_cols, examples):
-            col.markdown(f"""<div style="background:rgba(255,255,255,.025);border:1px solid rgba(255,255,255,.07);
-                 border-radius:12px;padding:12px;font-family:'DM Mono',monospace;">
-              <div style="font-size:9px;color:#38bdf8;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:6px;">{lbl}</div>
-              <div style="font-size:12px;color:#94a3b8;line-height:1.5;">{txt[:80]}{"…" if len(txt)>80 else ""}</div>
+        ec    = st.columns(len(exs))
+        cmap2 = {"Positive":"#34d399","Negative":"#fb7185","Neutral":"#fbbf24","Sarcasm":"#a78bfa"}
+        for col, (lbl, txt) in zip(ec, exs):
+            c = cmap2.get(lbl, "#8fa8c8")
+            col.markdown(f"""
+            <div style="background:var(--bg3);border:1px solid var(--border);
+                 border-top:2px solid {c};border-radius:10px;padding:14px;
+                 transition:border-color .2s;cursor:default;">
+              <div style="font-family:'IBM Plex Mono',monospace;font-size:8.5px;color:{c};
+                   letter-spacing:2px;text-transform:uppercase;margin-bottom:7px;">{lbl}</div>
+              <div style="font-family:'Inter',sans-serif;font-size:12px;
+                   color:#8fa8c8;line-height:1.6;">{txt[:70]}{"…" if len(txt)>70 else ""}</div>
             </div>""", unsafe_allow_html=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
     # ══════════════════════════════════════════════════════════════════════════
-    #  TAB 3 — MULTI-SOURCE VIEW
+    #  TAB 3 — PLATFORMS
     # ══════════════════════════════════════════════════════════════════════════
     with t3:
-        st.markdown("<div class='g-panel'>", unsafe_allow_html=True)
-        st.markdown("<div class='eyebrow'>🌍 Multi-Platform Opinion Analysis (Gap 2 ✅)</div>", unsafe_allow_html=True)
-        st.markdown("""<div style="font-family:'Outfit',sans-serif;font-size:14px;color:#64748b;margin-bottom:20px;line-height:1.7;">
-        Unlike existing research that analyzes <em>only Twitter</em>, Pulse collects and compares sentiment across
-        <strong style="color:#94a3b8;">4 platforms</strong>: YouTube, Instagram, NewsAPI, and Twitter.</div>""", unsafe_allow_html=True)
+        st.markdown("<div class='card'>", unsafe_allow_html=True)
+        st.markdown("<div class='label'>Cross-Platform Sentiment Comparison</div>", unsafe_allow_html=True)
 
         if st.session_state.df_store is not None:
             df = st.session_state.df_store
             if "Source" in df.columns and df["Source"].nunique() > 1:
-                # Stats table
-                platform_stats = df.groupby("Source")["Sentiment"].value_counts(normalize=True).mul(100).round(1)
-                platform_stats = platform_stats.unstack(fill_value=0).reset_index()
-                st.dataframe(platform_stats, use_container_width=True)
+                ps = df.groupby("Source")["Sentiment"].value_counts(normalize=True).mul(100).round(1).unstack(fill_value=0).reset_index()
+                st.dataframe(ps, use_container_width=True, hide_index=True)
 
-                # Heatmap
-                sources    = df["Source"].unique().tolist()
-                sentiments = ["Positive","Negative","Neutral"]
-                z_data, text_data = [], []
-                for src in sources:
-                    sub    = df[df["Source"]==src]["Sentiment"].value_counts(normalize=True).mul(100)
-                    row_z  = [round(sub.get(s,0),1) for s in sentiments]
-                    z_data.append(row_z); text_data.append([f"{v}%" for v in row_z])
-                fig_heat = go.Figure(go.Heatmap(z=z_data, x=sentiments, y=sources,
-                    text=text_data, texttemplate="%{text}",
-                    colorscale=[[0,"#0f172a"],[0.5,"#0ea5e9"],[1,"#34d399"]], showscale=True))
-                fig_heat.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                    font_color="#94a3b8", margin=dict(t=10,b=10,l=10,r=10), height=340)
-                st.plotly_chart(fig_heat, use_container_width=True)
+                srcs  = df["Source"].unique().tolist()
+                sents = ["Positive","Negative","Neutral"]
+                z, t  = [], []
+                for s in srcs:
+                    sub = df[df["Source"]==s]["Sentiment"].value_counts(normalize=True).mul(100)
+                    row = [round(sub.get(x,0),1) for x in sents]
+                    z.append(row); t.append([f"{v}%" for v in row])
+                fh = go.Figure(go.Heatmap(z=z,x=sents,y=srcs,text=t,texttemplate="%{text}",
+                    colorscale=[[0,"#080c14"],[0.4,"#0ea5e9"],[1,"#34d399"]],showscale=True))
+                fh.update_layout(paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)",
+                    font_color="#8fa8c8",margin=dict(t=10,b=10,l=10,r=10),height=300)
+                st.plotly_chart(fh, use_container_width=True, key="fig_plat_heat")
 
-                # Grouped bar
-                src_sent = df.groupby(["Source","Sentiment"]).size().reset_index(name="Count")
-                fig_src = px.bar(src_sent, x="Source", y="Count", color="Sentiment", barmode="group",
-                    color_discrete_map={"Positive":"#34d399","Negative":"#f87171","Neutral":"#fbbf24","Sarcasm":"#818cf8"})
-                fig_src.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                    font_color="#94a3b8", legend=dict(bgcolor="rgba(0,0,0,0)"),
-                    xaxis=dict(gridcolor="rgba(255,255,255,.05)"),
-                    yaxis=dict(gridcolor="rgba(255,255,255,.05)"),
-                    margin=dict(t=10,b=10,l=10,r=10), height=320)
-                st.plotly_chart(fig_src, use_container_width=True)
+                ss2 = df.groupby(["Source","Sentiment"]).size().reset_index(name="Count")
+                fs  = px.bar(ss2,x="Source",y="Count",color="Sentiment",barmode="group",
+                    color_discrete_map={"Positive":"#34d399","Negative":"#fb7185","Neutral":"#fbbf24","Sarcasm":"#a78bfa"})
+                fs.update_layout(paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)",
+                    font_color="#8fa8c8",legend=dict(bgcolor="rgba(0,0,0,0)",font=dict(color="#8fa8c8")),
+                    xaxis=dict(gridcolor="rgba(56,189,248,0.06)",color="#4a6380"),
+                    yaxis=dict(gridcolor="rgba(56,189,248,0.06)",color="#4a6380"),
+                    margin=dict(t=10,b=10,l=10,r=10),height=300)
+                st.plotly_chart(fs, use_container_width=True, key="fig_src")
             else:
-                st.info("Run analysis first, then fetch real data from multiple sources to see platform comparison.")
+                st.info("Run analysis first to see platform comparison.")
         else:
-            st.info("ℹ️ Run analysis in the Dashboard tab first.")
+            st.info("Run analysis first to see platform comparison.")
         st.markdown("</div>", unsafe_allow_html=True)
 
     # ══════════════════════════════════════════════════════════════════════════
-    #  TAB 4 — FETCH DATA
+    #  TAB 4 — DATA
     # ══════════════════════════════════════════════════════════════════════════
     with t4:
-        # ── YouTube + News + Twitter ──────────────────────────────────────────
-        st.markdown("<div class='g-panel'>", unsafe_allow_html=True)
-        st.markdown("<div class='eyebrow'>🌐 Fetch — YouTube · NewsAPI · Twitter</div>", unsafe_allow_html=True)
+        st.markdown("<div class='card'>", unsafe_allow_html=True)
+        st.markdown("<div class='label'>Fetch Live Data</div>", unsafe_allow_html=True)
 
-        fc1, fc2 = st.columns([3,1])
-        with fc1:
-            fetch_scheme = st.selectbox("Scheme", ["All Schemes"] + ALL_SCHEMES, key="fetch_scheme_sel", label_visibility="collapsed")
-        with fc2:
-            max_per = st.number_input("Max per source", min_value=50, max_value=500, value=200, step=50, key="max_per_src")
+        f1, f2, f3 = st.columns([3, 1, 1])
+        with f1:
+            fs = st.selectbox("Source scheme", ["All Schemes"] + ALL_SCHEMES, key="fetch_scheme", label_visibility="collapsed")
+        with f2:
+            mx = st.number_input("Max / source", 50, 500, 200, 50, key="max_src", label_visibility="collapsed")
+        with f3:
+            fb = st.button("Fetch →", key="btn_fetch")
 
-        fc3, fc4 = st.columns(2)
-        with fc3:
-            fetch_btn = st.button("⟶ Fetch Now", key="btn_fetch_all")
-        with fc4:
-            st.markdown("""<div style="font-family:'DM Mono',monospace;font-size:10px;color:#334155;line-height:1.8;padding-top:6px;">
-            YOUTUBE_API_KEY · NEWS_API_KEY · TWITTER_BEARER_TOKEN<br>Add these to your .env file</div>""", unsafe_allow_html=True)
-
-        if fetch_btn:
-            scheme_to_fetch = "All" if "All" in fetch_scheme else fetch_scheme
-            log_lines = []
-            log_box   = st.empty()
-
-            def _log(msg):
-                log_lines.append(msg)
-                log_box.markdown(
-                    "<div style='background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.06);"
-                    "border-radius:12px;padding:14px 18px;font-family:DM Mono,monospace;font-size:11px;"
-                    "color:#64748b;line-height:2;max-height:200px;overflow-y:auto;'>"
-                    + "<br>".join(f"› {m}" for m in log_lines[-12:]) + "</div>",
-                    unsafe_allow_html=True)
-
-            with st.spinner("Fetching from APIs..."):
-                counts = fetch_all(scheme=scheme_to_fetch, max_per_source=int(max_per), progress_callback=_log)
-
-            total = sum(counts.values())
-            cols = st.columns(4)
-            for col, (src, cnt) in zip(cols, counts.items()):
-                col.markdown(f"""<div class="metric-card" style="margin-top:12px;">
-                  <div class="metric-val">{cnt}</div>
-                  <div class="metric-lbl">{src}</div></div>""", unsafe_allow_html=True)
-
-            if total > 0:
-                st.success(f"✅ {total} new items saved to data.csv")
-            else:
-                st.warning("No data fetched. Check API keys in .env file.")
+        if fb:
+            ll = []; lb = st.empty()
+            def _lg(m):
+                ll.append(m)
+                lb.markdown(
+                    "<div style='background:var(--bg3);border:1px solid var(--border2);border-radius:10px;"
+                    "padding:14px 18px;font-family:IBM Plex Mono,monospace;font-size:11px;color:#8fa8c8;"
+                    "line-height:1.9;max-height:180px;overflow-y:auto;'>"
+                    + "<br>".join(f"› {x}" for x in ll[-10:]) + "</div>", unsafe_allow_html=True)
+            with st.spinner("Fetching…"):
+                cnts = fetch_all(scheme="All" if "All" in fs else fs, max_per_source=int(mx), progress_callback=_lg)
+            tot = sum(cnts.values())
+            c1,c2,c3,c4 = st.columns(4)
+            for col,(src,cnt) in zip([c1,c2,c3,c4],cnts.items()):
+                col.markdown(f"""<div class="mcard" style="margin-top:10px;">
+                    <div class="mval">{cnt}</div><div class="mlbl">{src}</div>
+                </div>""", unsafe_allow_html=True)
+            if tot>0: st.success(f"{tot} new rows added to dataset.")
+            else:     st.warning("No data fetched — check API keys in .env")
         st.markdown("</div>", unsafe_allow_html=True)
 
-        # ── Instagram URL ─────────────────────────────────────────────────────
-        st.markdown("<div class='g-panel'>", unsafe_allow_html=True)
-        st.markdown("<div class='eyebrow'>📸 Instagram — Paste Reel or Post URL</div>", unsafe_allow_html=True)
-        st.markdown("""<div style="font-family:'Outfit',sans-serif;font-size:13px;color:#4a5a72;line-height:1.8;margin-bottom:16px;">
-        Find any Instagram reel or post about a government scheme from
-        <b style="color:#e879f9">@narendramodi, @mygovindia, @pibindia</b> or hashtags like
-        <b style="color:#e879f9">#PMAY #AyushmanBharat #DigitalIndia</b>. Paste URL below.</div>""", unsafe_allow_html=True)
-
-        ig_url = st.text_input("Instagram URL",
-            placeholder="https://www.instagram.com/reel/ABC123xyz/",
-            key="ig_url_input", label_visibility="collapsed")
-        ig1, ig2, ig3 = st.columns([3,2,1])
-        with ig1:
-            ig_scheme = st.selectbox("Scheme for this post", ALL_SCHEMES, key="ig_scheme_sel")
-        with ig2:
-            ig_max = st.number_input("Max comments", min_value=50, max_value=1000, value=300, step=50, key="ig_max")
-        with ig3:
-            ig_btn = st.button("⟶ Fetch", key="btn_ig_fetch")
-
-        if ig_btn:
-            if not ig_url.strip():
-                st.warning("Please paste an Instagram URL first.")
-            elif "instagram.com" not in ig_url:
-                st.error("That does not look like an Instagram URL.")
-            else:
-                ig_logs = []; ig_log_box = st.empty()
-                def ig_log(msg):
-                    ig_logs.append(msg)
-                    ig_log_box.markdown(
-                        "<div style='background:rgba(0,0,0,.3);border:1px solid rgba(255,255,255,.06);"
-                        "border-radius:12px;padding:14px 18px;font-family:DM Mono,monospace;font-size:11px;"
-                        "color:#64748b;line-height:2;'>"
-                        + "<br>".join(f"› {m}" for m in ig_logs[-8:]) + "</div>",
-                        unsafe_allow_html=True)
-                with st.spinner("Fetching Instagram comments..."):
-                    rows = fetch_instagram_post(ig_url.strip(), ig_scheme, int(ig_max), ig_log)
-                if rows:
-                    st.success(f"✅ {len(rows)} comments fetched from Instagram!")
-                    st.dataframe(pd.DataFrame(rows[:10])[["Scheme","Language","Comment"]], use_container_width=True, height=200)
-                else:
-                    st.error("No comments fetched. Check INSTAGRAM_USERNAME and INSTAGRAM_PASSWORD in .env")
-
-
-        # ── Dataset status ────────────────────────────────────────────────────
-        st.markdown("<div class='g-panel'>", unsafe_allow_html=True)
-        st.markdown("<div class='eyebrow'>📊 Current Dataset Status</div>", unsafe_allow_html=True)
+        st.markdown("<div class='label'>Dataset Status</div>", unsafe_allow_html=True)
         try:
-            df_s = pd.read_csv("data/data.csv")
-            s1,s2,s3,s4 = st.columns(4)
-            for col, (val, lbl, c) in zip([s1,s2,s3,s4],[
-                (len(df_s),"Total Rows","#38bdf8"),
-                (df_s["Scheme"].nunique(),"Schemes","#34d399"),
-                (df_s["Source"].nunique(),"Sources","#818cf8"),
-                (df_s["Language"].nunique() if "Language" in df_s.columns else "—","Languages","#f59e0b"),
+            ds = pd.read_csv("data/data.csv")
+            d1,d2,d3,d4 = st.columns(4)
+            for col,(v,l,c) in zip([d1,d2,d3,d4],[
+                (len(ds),"Rows","#38bdf8"),
+                (ds["Scheme"].nunique(),"Schemes","#34d399"),
+                (ds["Source"].nunique(),"Sources","#a78bfa"),
+                (ds["Language"].nunique() if "Language" in ds.columns else "—","Languages","#fbbf24"),
             ]):
-                col.markdown(f"""<div style="text-align:center;">
-                  <div style="font-family:'Syne',sans-serif;font-size:28px;font-weight:700;color:{c};">{val}</div>
-                  <div style="font-family:'DM Mono',monospace;font-size:10px;color:#475569;">{lbl}</div></div>""",
-                    unsafe_allow_html=True)
-            src_counts = df_s["Source"].value_counts()
-            fig_s = px.bar(x=src_counts.index, y=src_counts.values, color=src_counts.values,
-                color_continuous_scale=["#1e3a4a","#38bdf8"], labels={"x":"Source","y":"Count"})
-            fig_s.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                font_color="#64748b", showlegend=False,
-                xaxis=dict(showgrid=False, tickfont=dict(family="DM Mono",size=10,color="#64748b")),
-                yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-                margin=dict(t=10,b=10,l=5,r=10), height=180)
-            st.plotly_chart(fig_s, use_container_width=True)
+                col.markdown(f"""<div class="mcard">
+                    <div class="mval" style="font-size:26px;">{v}</div>
+                    <div class="mlbl">{l}</div>
+                </div>""", unsafe_allow_html=True)
+            sc2  = ds["Source"].value_counts()
+            fs2  = px.bar(x=sc2.index, y=sc2.values, color=sc2.values,
+                color_continuous_scale=["#38bdf8","#818cf8"], labels={"x":"","y":"Count"})
+            fs2.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                font_color="#8fa8c8", showlegend=False,
+                xaxis=dict(showgrid=False, color="#4a6380"),
+                yaxis=dict(showgrid=False, showticklabels=False),
+                margin=dict(t=10,b=10,l=5,r=5), height=160)
+            st.plotly_chart(fs2, use_container_width=True, key="fig_ds_src")
         except FileNotFoundError:
-            st.info("No data yet. Run: python data/generate_data.py")
+            st.info("No dataset found. Run: python data/generate_data.py")
         st.markdown("</div>", unsafe_allow_html=True)
 
     # ══════════════════════════════════════════════════════════════════════════
-    #  TAB 5 — ABOUT & GAPS
+    #  TAB 5 — ABOUT
     # ══════════════════════════════════════════════════════════════════════════
     with t5:
+        st.markdown("""
+        <div class="card" style="text-align:center;padding:40px 36px;">
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:9.5px;color:#38bdf8;
+                 letter-spacing:3px;text-transform:uppercase;margin-bottom:16px;">
+                 Final Year Research Project</div>
+            <div style="font-family:'Syne',sans-serif;font-size:22px;font-weight:700;
+                 color:#e8eef8;line-height:1.4;margin-bottom:12px;letter-spacing:-.5px;">
+                Multilingual Multi-Source Sentiment Analysis Framework<br>
+                for Indian Government Schemes Using Adaptive Model Selection
+            </div>
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#4a6380;letter-spacing:1.5px;">
+                ML · DL · NLP · Transformers &nbsp;·&nbsp; 5 Research Gaps Addressed
+            </div>
+        </div>""", unsafe_allow_html=True)
+
         gaps = [
-            ("Gap 1","Language Barrier","🌐","Most research analyzes only English tweets. Regional languages like Hindi, Tamil, Hinglish are ignored.",
-             "Multilingual pipeline: LangDetect → Google Translator → English NLP. Supports EN/HI/TA/Hinglish.","#38bdf8"),
-            ("Gap 2","Only Twitter Data","🐦","Existing papers analyze Twitter exclusively, missing public opinion on YouTube, Instagram, News apps.",
-             "Multi-source: YouTube, Instagram, NewsAPI, Twitter — all compared in Platform Comparison tab.","#818cf8"),
-            ("Gap 3","Random Algorithm Selection","🎲","Researchers randomly pick algorithms without knowing which suits the dataset.",
-             "Adaptive AutoML: ML (7 models) + NLP (TextBlob, VADER) + DL (LSTM, BiLSTM, CNN) + Transformers (ALBERT, DistilBERT). Best auto-selected by accuracy; ties broken by speed.","#34d399"),
-            ("Gap 4","Binary Classification Only","⚖️","Most studies classify only Positive/Negative, ignoring the Neutral class.",
-             "Three-class classification: Positive / Neutral / Negative with per-class F1/Precision/Recall.","#f59e0b"),
-            ("Gap 5","Sarcasm Ignored","🙄","Sarcasm flips sentiment. Most papers ignore it, causing misclassification.",
-             "Advanced sarcasm detection: emoji signals + regex pattern matching + capitalisation ratio + punctuation irony + Hindi sarcasm markers. Score 0–100%. Overrides Positive → Negative.","#f87171"),
+            ("01","Language Barrier","#38bdf8",
+             "Most research processes only English text, ignoring India's 22 official languages and Hinglish.",
+             "LangDetect + deep-translator pipeline supports English, Hindi, Tamil, Telugu, Bengali, Hinglish, and more. Non-English text is auto-translated before analysis."),
+            ("02","Single Platform","#818cf8",
+             "95% of published papers analyse Twitter alone, missing the broader public discourse on YouTube, Instagram, and news platforms.",
+             "Multi-source architecture covers YouTube, Twitter, Instagram, and NewsAPI. Cross-platform comparison visualised in the Platforms tab."),
+            ("03","Random Model Selection","#34d399",
+             "Researchers arbitrarily select algorithms without benchmarking them against the specific dataset characteristics.",
+             "Adaptive engine trains 7 classical ML models + TextBlob + VADER. Optional LSTM, BiLSTM, CNN, ALBERT, DistilBERT. Best model selected by accuracy; ties broken by inference speed."),
+            ("04","Binary Classification","#fbbf24",
+             "Most studies output only Positive / Negative, discarding the Neutral class that represents a large portion of real public opinion.",
+             "Three-class classification: Positive / Neutral / Negative with per-class F1, Precision, and Recall metrics for each model."),
+            ("05","Sarcasm Ignored","#fb7185",
+             "Standard sentiment models misclassify sarcastic comments as positive because they read literal word polarity.",
+             "Advanced sarcasm engine: emoji signals, regex irony patterns, capitalisation ratio, punctuation analysis, and Hindi sarcasm markers. Returns a 0–100% confidence score. Sarcastic positives auto-flipped to Negative."),
         ]
-        for gap_id, title, icon, problem, solution, clr in gaps:
-            st.markdown(f"""<div class="g-panel" style="border-left:3px solid {clr}50;">
+
+        for gid, title, clr, problem, solution in gaps:
+            st.markdown(f"""
+            <div class="card" style="border-left:3px solid {clr};padding:24px 28px;margin-bottom:12px;">
               <div style="display:flex;align-items:flex-start;gap:18px;">
-                <div style="min-width:48px;height:48px;border-radius:12px;background:{clr}15;border:1px solid {clr}30;
-                     display:flex;align-items:center;justify-content:center;font-size:22px;">{icon}</div>
+                <div style="min-width:38px;height:38px;border-radius:9px;
+                     background:{clr}10;border:1px solid {clr}22;
+                     display:flex;align-items:center;justify-content:center;
+                     font-family:'IBM Plex Mono',monospace;font-size:11px;
+                     font-weight:500;color:{clr};flex-shrink:0;
+                     box-shadow:0 0 12px {clr}15;">{gid}</div>
                 <div style="flex:1;">
-                  <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px;">
-                    <span style="font-family:'DM Mono',monospace;font-size:10px;color:{clr};letter-spacing:2px;text-transform:uppercase;
-                         background:{clr}15;border:1px solid {clr}30;border-radius:100px;padding:3px 12px;">{gap_id}</span>
-                    <span style="font-family:'Syne',sans-serif;font-size:18px;font-weight:700;color:#f1f5f9;">{title}</span>
+                  <div style="font-family:'Syne',sans-serif;font-size:16px;font-weight:700;
+                       color:#e8eef8;margin-bottom:12px;letter-spacing:-.3px;">{title}</div>
+                  <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;">
+                    <div>
+                      <div style="font-family:'IBM Plex Mono',monospace;font-size:8.5px;
+                           color:#4a6380;letter-spacing:2.5px;text-transform:uppercase;
+                           margin-bottom:6px;">Problem</div>
+                      <div style="font-family:'Inter',sans-serif;font-size:13px;
+                           color:#8fa8c8;line-height:1.7;">{problem}</div>
+                    </div>
+                    <div>
+                      <div style="font-family:'IBM Plex Mono',monospace;font-size:8.5px;
+                           color:{clr};letter-spacing:2.5px;text-transform:uppercase;
+                           margin-bottom:6px;opacity:0.8;">Solution</div>
+                      <div style="font-family:'Inter',sans-serif;font-size:13px;
+                           color:#e8eef8;line-height:1.7;">{solution}</div>
+                    </div>
                   </div>
-                  <div style="font-family:'DM Mono',monospace;font-size:11px;color:#64748b;letter-spacing:1px;text-transform:uppercase;margin-bottom:6px;">Problem</div>
-                  <div style="font-family:'Outfit',sans-serif;font-size:14px;color:#94a3b8;margin-bottom:14px;line-height:1.7;">{problem}</div>
-                  <div style="font-family:'DM Mono',monospace;font-size:11px;color:{clr};letter-spacing:1px;text-transform:uppercase;margin-bottom:6px;">Our Solution ✅</div>
-                  <div style="font-family:'Outfit',sans-serif;font-size:14px;color:#cbd5e1;line-height:1.7;">{solution}</div>
-                </div></div></div>""", unsafe_allow_html=True)
+                </div>
+              </div>
+            </div>""", unsafe_allow_html=True)
 
-        st.markdown("""<div class='g-panel' style='text-align:center;'>
-          <div style='font-family:"DM Mono",monospace;font-size:10px;color:#38bdf8;letter-spacing:3px;text-transform:uppercase;margin-bottom:12px;'>Research Title</div>
-          <div style='font-family:"Syne",sans-serif;font-size:20px;font-weight:700;color:#f1f5f9;line-height:1.4;'>
-            Multilingual Multi-Source Sentiment Analysis Framework<br>for Indian Government Schemes Using Adaptive Model Selection
-          </div>
-          <div style='font-family:"DM Mono",monospace;font-size:11px;color:#475569;margin-top:10px;letter-spacing:1px;'>
-            Addressing 5 Research Gaps · ML + DL + NLP + Transformers · Final Year Major Project
-          </div></div>""", unsafe_allow_html=True)
-
-    st.markdown("""<div style="text-align:center;font-family:'DM Mono',monospace;font-size:10px;
-         color:#1e293b;margin-top:50px;padding-bottom:20px;letter-spacing:2px;text-transform:uppercase;">
-      Pulse Sentiment AI · ML + DL + NLP + Transformers · Multilingual · Multi-Source · Sarcasm-Aware
+    # ── Footer ────────────────────────────────────────────────────────────────
+    st.markdown("""
+    <div style="text-align:center;padding:40px 0 20px;font-family:'IBM Plex Mono',monospace;
+         font-size:9px;color:#2a3a50;letter-spacing:3px;text-transform:uppercase;">
+        Pulse Sentiment AI &nbsp;·&nbsp; Research Edition &nbsp;·&nbsp; 2025–26
     </div>""", unsafe_allow_html=True)
