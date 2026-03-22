@@ -649,7 +649,7 @@ else:
                 if "Source" in df.columns:
                     # ── Filter to current 4 sources only ──────────────────────
                     # Excludes old Twitter/Instagram rows still in data.csv
-                    valid_sources = ["YouTube", "News App", "Google News", "Hindi News"]
+                    valid_sources = {"YouTube", "News App", "Google News", "Hindi News","Dainik Bhaskar", "Amar Ujala", "Navbharat Times","Jagran", "NDTV Hindi", "ABP Live",}
                     df_plot = df[df["Source"].isin(valid_sources)]
                     if len(df_plot) == 0:
                         df_plot = df  # fallback if new data not yet fetched
@@ -701,7 +701,7 @@ else:
                 st.markdown("<div class='card'>", unsafe_allow_html=True)
                 st.markdown("<div class='label'>Platform × Sentiment Heatmap</div>", unsafe_allow_html=True)
                 # Only show current 4 platforms in heatmap
-                valid_sources = ["YouTube", "News App", "Google News", "Hindi News"]
+                valid_sources = {"YouTube", "News App", "Google News", "Hindi News","Dainik Bhaskar", "Amar Ujala", "Navbharat Times","Jagran", "NDTV Hindi", "ABP Live",}
                 df_heat = df[df["Source"].isin(valid_sources)]
                 if len(df_heat) == 0:
                     df_heat = df
@@ -953,7 +953,7 @@ else:
             df = st.session_state.df_store
 
             # Filter to only current 4 sources
-            valid_sources = ["YouTube", "News App", "Google News", "Hindi News"]
+            valid_sources = {"YouTube", "News App", "Google News", "Hindi News","Dainik Bhaskar", "Amar Ujala", "Navbharat Times","Jagran", "NDTV Hindi", "ABP Live",}
             df_plat = df[df["Source"].isin(valid_sources)]
             if len(df_plat) == 0:
                 df_plat = df  # fallback
@@ -1047,7 +1047,7 @@ else:
 
             # ── Show 4 source metric cards ────────────────────────────────────
             c1, c2, c3, c4 = st.columns(4)
-            source_icons = {"YouTube":"📺", "News App":"📰", "Google News":"🌐", "Hindi News":"🗞️"}
+            source_icons = {"YouTube":       "📺","News App":      "📰","Google News":   "🌐","Hindi News":    "🗞️","Dainik Bhaskar":"🗞️","Amar Ujala":    "🗞️","Navbharat Times":"🗞️","Jagran":        "🗞️","NDTV Hindi":    "🗞️","ABP Live":      "🗞️",}
             for col, (src, cnt) in zip([c1,c2,c3,c4], cnts.items()):
                 icon = source_icons.get(src, "📡")
                 col.markdown(f"""<div class="mcard" style="margin-top:10px;">
