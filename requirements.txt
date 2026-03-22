@@ -16,3 +16,4 @@ beautifulsoup4
 lxml
 google-api-python-client
 newsapi-python
+supabase
