@@ -30,7 +30,11 @@ from auth.auth_manager   import login, signup, get_google_auth_url
 # ── Cache helpers ─────────────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False)
 def _cached_preprocess(csv_hash: str, scheme: str):
-    df_raw = pd.read_csv("data/data.csv")
+    try:
+        from data.storage import load_data
+        df_raw = load_data()
+    except Exception:
+        df_raw = pd.read_csv("data/data.csv")
     if scheme != "All Schemes":
         key   = scheme.split("—")[0].strip().split(" ")[0]
         df_f  = df_raw[df_raw["Scheme"].str.contains(key, case=False, na=False)]
@@ -1068,7 +1072,11 @@ else:
         st.markdown("<div class='label'>Dataset Status</div>", unsafe_allow_html=True)
 
         try:
-            ds = pd.read_csv("data/data.csv")
+            try:
+                from data.storage import load_data
+                ds = load_data()
+            except Exception:
+                ds = pd.read_csv("data/data.csv")
 
             # ── Why schemes may show more than 40 ─────────────────────────────
             # generate_data.py uses short names ("PMAY", "PM Kisan")
