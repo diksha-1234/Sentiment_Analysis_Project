@@ -557,28 +557,69 @@ def fetch_google_news_rss(scheme: str, limit: int = 200, cb=None) -> list:
 # ═════════════════════════════════════════════════════════════════════════════
 
 # Hindi news RSS feeds — all official, no API key needed
+# UPDATED: Fixed broken Navbharat Times and Jagran URLs
+# Added NDTV Hindi and ABP Live as reliable backups
 _HINDI_RSS_FEEDS = [
     # Dainik Bhaskar — India's largest Hindi newspaper
-    ("https://www.bhaskar.com/rss-feed/1061/",           "Dainik Bhaskar"),
+    ("https://www.bhaskar.com/rss-feed/1061/",                      "Dainik Bhaskar"),
     # Amar Ujala — Major Hindi newspaper
-    ("https://www.amarujala.com/rss/india-news.xml",      "Amar Ujala"),
-    # Navbharat Times — Hindi edition of Times of India
-    ("https://navbharattimes.indiatimes.com/rssfeeds/1564454837.cms", "Navbharat Times"),
-    # Jagran — Major Hindi newspaper
-    ("https://www.jagran.com/rss/news-national.xml",      "Jagran"),
+    ("https://www.amarujala.com/rss/india-news.xml",                 "Amar Ujala"),
+    # Navbharat Times — updated URL (old one returned 404)
+    ("https://navbharattimes.indiatimes.com/rssfeeds/4719148.cms",   "Navbharat Times"),
+    # Jagran — updated URL (old one returned 404)
+    ("https://www.jagran.com/rss/news-national-politics.xml",        "Jagran"),
+    # NDTV Hindi — reliable backup, always works
+    ("https://feeds.feedburner.com/ndtvkhabar",                      "NDTV Hindi"),
+    # ABP Live Hindi — reliable backup
+    ("https://www.abplive.com/rss/india",                            "ABP Live"),
 ]
+
+
+def _get_working_hindi_feeds() -> list:
+    """
+    Tests each Hindi RSS feed URL before using it.
+    Returns only feeds that respond with HTTP 200.
+
+    Why this exists:
+      News sites change their RSS URLs without notice.
+      Navbharat Times and Jagran returned 404 because their
+      URLs changed. This function automatically skips broken
+      URLs so the app never crashes due to dead RSS links.
+    """
+    try:
+        import requests
+    except ImportError:
+        return _HINDI_RSS_FEEDS  # fallback if requests not available
+
+    working = []
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; RSSReader/1.0)"}
+
+    for url, name in _HINDI_RSS_FEEDS:
+        try:
+            resp = requests.head(url, headers=headers, timeout=5)
+            if resp.status_code == 200:
+                working.append((url, name))
+            else:
+                print(f"[Hindi RSS] Skipping {name} — HTTP {resp.status_code}")
+        except Exception:
+            print(f"[Hindi RSS] Skipping {name} — connection failed")
+
+    if not working:
+        print("[Hindi RSS] No working feeds found — skipping Hindi news")
+    else:
+        names = [n for _, n in working]
+        print(f"[Hindi RSS] {len(working)} working feeds: {names}")
+
+    return working
 
 
 def fetch_hindi_news_rss(scheme: str, limit: int = 150, cb=None) -> list:
     """
     Fetches Hindi news from official RSS feeds of major Hindi newspapers.
+    Only uses feeds that are currently working — dead URLs are auto-skipped.
 
-    How it works:
-      RSS feeds are official, machine-readable XML files published by newspapers
-      They update automatically as new articles are published
-      We filter articles related to the scheme using keyword matching
-
-    Sources: Dainik Bhaskar, Amar Ujala, Navbharat Times, Jagran
+    Sources tried: Dainik Bhaskar, Amar Ujala, Navbharat Times,
+                   Jagran, NDTV Hindi, ABP Live
     No API key required.
     """
     try:
@@ -607,7 +648,7 @@ def fetch_hindi_news_rss(scheme: str, limit: int = 150, cb=None) -> list:
         if len(word) > 2:
             keywords.add(word)
 
-    for rss_url, source_name in _HINDI_RSS_FEEDS:
+    for rss_url, source_name in _get_working_hindi_feeds():
         if len(rows) >= limit:
             break
         try:
