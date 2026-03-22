@@ -344,7 +344,24 @@ def _load_existing_normalised() -> tuple[set, int]:
 
 
 def _save_rows(rows: list) -> int:
-    """Save unique rows to CSV. Deduplicates within batch AND vs CSV."""
+    """
+    Save rows using persistent storage.
+    Automatically uses Supabase when deployed,
+    local CSV when running locally.
+    """
+    try:
+        from data.storage import save_rows
+        return save_rows(rows)
+    except Exception as e:
+        print(f"[Scraper] Storage error: {e} — falling back to CSV")
+        return _save_rows_local(rows)
+
+
+def _save_rows_local(rows: list) -> int:
+    """
+    Original CSV save logic — kept as fallback.
+    Only used if Supabase import fails.
+    """
     if not rows:
         return 0
     DATA_CSV.parent.mkdir(exist_ok=True)
