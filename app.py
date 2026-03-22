@@ -10,7 +10,7 @@ for _pkg, _path in [
 ]:
     try:    nltk.data.find(_path)
     except LookupError: nltk.download(_pkg, quiet=True)
-    
+
 import sys, os
 sys.path.insert(0, os.path.dirname(__file__))
 from dotenv import load_dotenv
@@ -24,7 +24,7 @@ import plotly.graph_objects as go
 
 from modules.preprocess  import preprocess_dataframe, detect_language, translate_to_english, detect_sarcasm, clean_text, get_sentiment
 from modules.model       import train_models, get_detailed_metrics, predict_live, predict_live_with_confidence, detect_sarcasm_advanced
-from modules.scraper     import ALL_SCHEMES, fetch_all, fetch_instagram_post
+from modules.scraper     import ALL_SCHEMES, fetch_all          # ← fetch_instagram_post removed
 from auth.auth_manager   import login, signup, get_google_auth_url
 
 # ── Cache helpers ─────────────────────────────────────────────────────────────
@@ -51,15 +51,13 @@ def _get_secret(key: str) -> str:
 
 GOOGLE_CLIENT_ID     = _get_secret("GOOGLE_CLIENT_ID")
 GOOGLE_CLIENT_SECRET = _get_secret("GOOGLE_CLIENT_SECRET")
+
 def _get_redirect_uri() -> str:
-    # On Streamlit Cloud — use the deployed URL
-    # Locally — use localhost
     try:
-        import streamlit as st
         cloud_url = st.secrets.get("REDIRECT_URI", "")
         if cloud_url:
             return cloud_url
-    except:
+    except Exception:
         pass
     return os.getenv("REDIRECT_URI", "http://localhost:8501")
 
@@ -93,15 +91,12 @@ MODEL_TYPE_COLORS = {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  GLOBAL CSS — Pure dark theme, sharp contrast, premium typography
+#  GLOBAL CSS
 # ─────────────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@300;400;500&family=Inter:wght@300;400;500;600&display=swap');
 
-/* ══════════════════════════════════════════════════════
-   FORCED DARK THEME — CSS VARIABLES
-══════════════════════════════════════════════════════ */
 :root {
     --bg:        #080c14;
     --bg2:       #0d1420;
@@ -133,7 +128,6 @@ st.markdown("""
     --radius-xs: 5px;
 }
 
-/* ── FORCE DARK EVERYWHERE ── */
 html, body, .stApp, .stApp > div,
 [data-testid="stAppViewContainer"],
 [data-testid="stHeader"],
@@ -145,7 +139,6 @@ section[data-testid="stSidebar"],
     font-family: 'Inter', sans-serif !important;
 }
 
-/* ── HIDE STREAMLIT CHROME ── */
 header, footer, #MainMenu, .stDeployButton,
 [data-testid="stDecoration"],
 [data-testid="stStatusWidget"] {
@@ -154,7 +147,6 @@ header, footer, #MainMenu, .stDeployButton,
 }
 [data-testid="stSidebar"] { display: none !important; }
 
-/* ── NOISE TEXTURE OVERLAY ── */
 .stApp::before {
     content: "";
     position: fixed; inset: 0; z-index: 0;
@@ -167,24 +159,13 @@ header, footer, #MainMenu, .stDeployButton,
     background-size: cover, cover, cover, 200px 200px;
     animation: ambientShift 20s ease-in-out infinite alternate;
 }
-@keyframes ambientShift {
-    0%   { opacity: 0.6; }
-    50%  { opacity: 1.0; }
-    100% { opacity: 0.7; }
-}
+@keyframes ambientShift { 0%{opacity:0.6} 50%{opacity:1.0} 100%{opacity:0.7} }
 
-/* ── SCANLINE EFFECT ── */
 .stApp::after {
     content: "";
     position: fixed; inset: 0; z-index: 0;
     pointer-events: none;
-    background: repeating-linear-gradient(
-        0deg,
-        transparent,
-        transparent 2px,
-        rgba(0,0,0,0.03) 2px,
-        rgba(0,0,0,0.03) 4px
-    );
+    background: repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,0.03) 2px,rgba(0,0,0,0.03) 4px);
 }
 
 .block-container {
@@ -193,16 +174,9 @@ header, footer, #MainMenu, .stDeployButton,
     max-width: 1360px !important;
 }
 
-/* ── PAGE ENTRY ── */
 .block-container { animation: pageIn .5s cubic-bezier(.16,1,.3,1) both; }
-@keyframes pageIn {
-    from { opacity:0; transform: translateY(16px); }
-    to   { opacity:1; transform: translateY(0); }
-}
+@keyframes pageIn { from{opacity:0;transform:translateY(16px)} to{opacity:1;transform:translateY(0)} }
 
-/* ══════════════════════════════════════════════════════
-   CARDS
-══════════════════════════════════════════════════════ */
 .card {
     background: var(--surface);
     border: 1px solid var(--border2);
@@ -220,464 +194,182 @@ header, footer, #MainMenu, .stDeployButton,
     content: "";
     position: absolute; top: 0; left: 0; right: 0; height: 1px;
     background: linear-gradient(90deg, transparent, rgba(56,189,248,0.4), transparent);
-    opacity: 0;
-    transition: opacity .3s;
+    opacity: 0; transition: opacity .3s;
 }
-.card:hover {
-    border-color: var(--border3);
-    box-shadow: var(--shadow-lg), var(--glow);
-    transform: translateY(-1px);
-}
+.card:hover { border-color:var(--border3); box-shadow:var(--shadow-lg),var(--glow); transform:translateY(-1px); }
 .card:hover::before { opacity: 1; }
 
-/* ══════════════════════════════════════════════════════
-   SECTION LABELS
-══════════════════════════════════════════════════════ */
 .label {
     font-family: 'IBM Plex Mono', monospace;
-    font-size: 9.5px;
-    letter-spacing: 3px;
-    text-transform: uppercase;
-    color: var(--accent);
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin-bottom: 18px;
-    opacity: 0.9;
+    font-size: 9.5px; letter-spacing: 3px; text-transform: uppercase;
+    color: var(--accent); display: flex; align-items: center; gap: 10px;
+    margin-bottom: 18px; opacity: 0.9;
 }
-.label::before {
-    content: "";
-    width: 3px; height: 3px;
-    border-radius: 50%;
-    background: var(--accent);
-    box-shadow: 0 0 6px var(--accent);
-}
-.label::after {
-    content: "";
-    flex: 1; height: 1px;
-    background: linear-gradient(90deg, rgba(56,189,248,0.25), transparent);
-}
+.label::before { content:""; width:3px; height:3px; border-radius:50%; background:var(--accent); box-shadow:0 0 6px var(--accent); }
+.label::after  { content:""; flex:1; height:1px; background:linear-gradient(90deg,rgba(56,189,248,0.25),transparent); }
 
-/* ══════════════════════════════════════════════════════
-   TYPOGRAPHY
-══════════════════════════════════════════════════════ */
-h1, h2, h3 {
-    font-family: 'Syne', sans-serif !important;
-    font-weight: 700 !important;
-    color: var(--txt) !important;
-    letter-spacing: -.5px !important;
-}
-p, li, span, div {
-    color: var(--txt2);
-}
+h1, h2, h3 { font-family:'Syne',sans-serif !important; font-weight:700 !important; color:var(--txt) !important; letter-spacing:-.5px !important; }
+p, li, span, div { color: var(--txt2); }
 
-/* ══════════════════════════════════════════════════════
-   INPUTS & FORMS
-══════════════════════════════════════════════════════ */
 .stTextInput > div > div > input,
 .stTextArea > div > div > textarea {
-    background: var(--bg3) !important;
-    border: 1px solid var(--border2) !important;
-    border-radius: var(--radius-sm) !important;
-    color: var(--txt) !important;
-    font-family: 'Inter', sans-serif !important;
-    font-size: 14px !important;
-    padding: 12px 16px !important;
-    transition: border-color .2s, box-shadow .2s !important;
-    box-shadow: inset 0 1px 3px rgba(0,0,0,0.3) !important;
-    caret-color: var(--accent) !important;
+    background:var(--bg3) !important; border:1px solid var(--border2) !important;
+    border-radius:var(--radius-sm) !important; color:var(--txt) !important;
+    font-family:'Inter',sans-serif !important; font-size:14px !important;
+    padding:12px 16px !important; transition:border-color .2s,box-shadow .2s !important;
+    box-shadow:inset 0 1px 3px rgba(0,0,0,0.3) !important; caret-color:var(--accent) !important;
 }
 .stTextInput > div > div > input:focus,
 .stTextArea > div > div > textarea:focus {
-    border-color: var(--accent) !important;
-    box-shadow: 0 0 0 3px rgba(56,189,248,0.1), inset 0 1px 3px rgba(0,0,0,0.3) !important;
-    outline: none !important;
-    background: var(--bg4) !important;
+    border-color:var(--accent) !important;
+    box-shadow:0 0 0 3px rgba(56,189,248,0.1),inset 0 1px 3px rgba(0,0,0,0.3) !important;
+    outline:none !important; background:var(--bg4) !important;
 }
 .stTextInput > div > div > input::placeholder,
-.stTextArea > div > div > textarea::placeholder {
-    color: var(--txt3) !important;
-}
-.stTextInput > label, .stTextArea > label,
-.stSelectbox > label, .stNumberInput > label {
-    font-family: 'IBM Plex Mono', monospace !important;
-    font-size: 9px !important;
-    letter-spacing: 2.5px !important;
-    text-transform: uppercase !important;
-    color: var(--txt3) !important;
+.stTextArea > div > div > textarea::placeholder { color:var(--txt3) !important; }
+.stTextInput > label,.stTextArea > label,.stSelectbox > label,.stNumberInput > label {
+    font-family:'IBM Plex Mono',monospace !important; font-size:9px !important;
+    letter-spacing:2.5px !important; text-transform:uppercase !important; color:var(--txt3) !important;
 }
 
-/* ── SELECTBOX ── */
 .stSelectbox > div > div {
-    background: var(--bg3) !important;
-    border: 1px solid var(--border2) !important;
-    border-radius: var(--radius-sm) !important;
-    color: var(--txt) !important;
-    font-family: 'Inter', sans-serif !important;
-    font-size: 14px !important;
-    box-shadow: inset 0 1px 3px rgba(0,0,0,0.3) !important;
+    background:var(--bg3) !important; border:1px solid var(--border2) !important;
+    border-radius:var(--radius-sm) !important; color:var(--txt) !important;
+    font-family:'Inter',sans-serif !important; font-size:14px !important;
+    box-shadow:inset 0 1px 3px rgba(0,0,0,0.3) !important;
 }
-.stSelectbox > div > div:hover {
-    border-color: var(--border3) !important;
-}
-[data-baseweb="select"] > div {
-    background: var(--bg3) !important;
-    border-color: var(--border2) !important;
-    color: var(--txt) !important;
-}
-[data-baseweb="popover"] {
-    background: var(--bg3) !important;
-    border: 1px solid var(--border2) !important;
-    border-radius: var(--radius-sm) !important;
-    box-shadow: var(--shadow-lg) !important;
-}
-[data-baseweb="menu"] { background: var(--bg3) !important; }
-[data-baseweb="option"]:hover { background: var(--bg4) !important; }
+.stSelectbox > div > div:hover { border-color:var(--border3) !important; }
+[data-baseweb="select"] > div { background:var(--bg3) !important; border-color:var(--border2) !important; color:var(--txt) !important; }
+[data-baseweb="popover"] { background:var(--bg3) !important; border:1px solid var(--border2) !important; border-radius:var(--radius-sm) !important; box-shadow:var(--shadow-lg) !important; }
+[data-baseweb="menu"] { background:var(--bg3) !important; }
+[data-baseweb="option"]:hover { background:var(--bg4) !important; }
 
-/* ── NUMBER INPUT ── */
 .stNumberInput > div > div > input {
-    background: var(--bg3) !important;
-    border: 1px solid var(--border2) !important;
-    border-radius: var(--radius-sm) !important;
-    color: var(--txt) !important;
-    font-family: 'Inter', sans-serif !important;
-    font-size: 14px !important;
-    box-shadow: inset 0 1px 3px rgba(0,0,0,0.3) !important;
+    background:var(--bg3) !important; border:1px solid var(--border2) !important;
+    border-radius:var(--radius-sm) !important; color:var(--txt) !important;
+    font-family:'Inter',sans-serif !important; font-size:14px !important;
+    box-shadow:inset 0 1px 3px rgba(0,0,0,0.3) !important;
 }
 
-/* ══════════════════════════════════════════════════════
-   BUTTONS
-══════════════════════════════════════════════════════ */
 .stButton > button {
-    background: var(--bg3) !important;
-    border: 1px solid var(--border2) !important;
-    border-radius: var(--radius-sm) !important;
-    color: var(--txt2) !important;
-    font-family: 'IBM Plex Mono', monospace !important;
-    font-size: 10px !important;
-    letter-spacing: 2px !important;
-    text-transform: uppercase !important;
-    padding: 12px 20px !important;
-    width: 100% !important;
-    transition: all .25s cubic-bezier(.16,1,.3,1) !important;
-    box-shadow: var(--shadow) !important;
-    position: relative !important;
-    overflow: hidden !important;
+    background:var(--bg3) !important; border:1px solid var(--border2) !important;
+    border-radius:var(--radius-sm) !important; color:var(--txt2) !important;
+    font-family:'IBM Plex Mono',monospace !important; font-size:10px !important;
+    letter-spacing:2px !important; text-transform:uppercase !important;
+    padding:12px 20px !important; width:100% !important;
+    transition:all .25s cubic-bezier(.16,1,.3,1) !important;
+    box-shadow:var(--shadow) !important; position:relative !important; overflow:hidden !important;
 }
 .stButton > button::before {
-    content: "" !important;
-    position: absolute !important;
-    inset: 0 !important;
-    background: linear-gradient(135deg, rgba(56,189,248,0.05), rgba(129,140,248,0.05)) !important;
-    opacity: 0 !important;
-    transition: opacity .25s !important;
+    content:"" !important; position:absolute !important; inset:0 !important;
+    background:linear-gradient(135deg,rgba(56,189,248,0.05),rgba(129,140,248,0.05)) !important;
+    opacity:0 !important; transition:opacity .25s !important;
 }
 .stButton > button:hover {
-    background: var(--bg4) !important;
-    border-color: var(--accent) !important;
-    color: var(--accent) !important;
-    transform: translateY(-1px) !important;
-    box-shadow: var(--shadow), 0 0 16px rgba(56,189,248,0.15) !important;
+    background:var(--bg4) !important; border-color:var(--accent) !important;
+    color:var(--accent) !important; transform:translateY(-1px) !important;
+    box-shadow:var(--shadow),0 0 16px rgba(56,189,248,0.15) !important;
 }
-.stButton > button:hover::before { opacity: 1 !important; }
-.stButton > button:active { transform: translateY(0) !important; }
+.stButton > button:hover::before { opacity:1 !important; }
+.stButton > button:active { transform:translateY(0) !important; }
 
-/* ── PRIMARY BUTTON (first column) ── */
 div[data-testid="column"]:first-child .stButton > button {
-    background: linear-gradient(135deg, #0ea5e9, #6366f1) !important;
-    border: none !important;
-    color: #ffffff !important;
-    font-weight: 500 !important;
-    box-shadow: 0 4px 20px rgba(14,165,233,0.3), 0 2px 8px rgba(0,0,0,0.4) !important;
-    text-shadow: 0 1px 2px rgba(0,0,0,0.2) !important;
+    background:linear-gradient(135deg,#0ea5e9,#6366f1) !important; border:none !important;
+    color:#ffffff !important; font-weight:500 !important;
+    box-shadow:0 4px 20px rgba(14,165,233,0.3),0 2px 8px rgba(0,0,0,0.4) !important;
+    text-shadow:0 1px 2px rgba(0,0,0,0.2) !important;
 }
 div[data-testid="column"]:first-child .stButton > button:hover {
-    background: linear-gradient(135deg, #38bdf8, #818cf8) !important;
-    color: #ffffff !important;
-    box-shadow: 0 6px 28px rgba(56,189,248,0.4), 0 2px 8px rgba(0,0,0,0.4) !important;
-    transform: translateY(-2px) !important;
+    background:linear-gradient(135deg,#38bdf8,#818cf8) !important; color:#ffffff !important;
+    box-shadow:0 6px 28px rgba(56,189,248,0.4),0 2px 8px rgba(0,0,0,0.4) !important;
+    transform:translateY(-2px) !important;
 }
 
-/* ══════════════════════════════════════════════════════
-   TABS
-══════════════════════════════════════════════════════ */
 .stTabs [data-baseweb="tab-list"] {
-    background: var(--bg2) !important;
-    border-radius: 10px !important;
-    padding: 4px !important;
-    gap: 2px !important;
-    border: 1px solid var(--border) !important;
-    box-shadow: inset 0 1px 3px rgba(0,0,0,0.3) !important;
+    background:var(--bg2) !important; border-radius:10px !important; padding:4px !important;
+    gap:2px !important; border:1px solid var(--border) !important;
+    box-shadow:inset 0 1px 3px rgba(0,0,0,0.3) !important;
 }
 .stTabs [data-baseweb="tab"] {
-    font-family: 'IBM Plex Mono', monospace !important;
-    font-size: 10px !important;
-    letter-spacing: 2px !important;
-    text-transform: uppercase !important;
-    color: var(--txt3) !important;
-    border-radius: 7px !important;
-    padding: 9px 20px !important;
-    transition: all .2s !important;
+    font-family:'IBM Plex Mono',monospace !important; font-size:10px !important;
+    letter-spacing:2px !important; text-transform:uppercase !important;
+    color:var(--txt3) !important; border-radius:7px !important;
+    padding:9px 20px !important; transition:all .2s !important;
 }
-.stTabs [data-baseweb="tab"]:hover {
-    color: var(--txt2) !important;
-    background: var(--bg3) !important;
-}
+.stTabs [data-baseweb="tab"]:hover { color:var(--txt2) !important; background:var(--bg3) !important; }
 .stTabs [aria-selected="true"] {
-    background: var(--bg4) !important;
-    color: var(--accent) !important;
-    box-shadow: 0 1px 6px rgba(0,0,0,0.4), 0 0 12px rgba(56,189,248,0.1) !important;
-    border: 1px solid var(--border2) !important;
+    background:var(--bg4) !important; color:var(--accent) !important;
+    box-shadow:0 1px 6px rgba(0,0,0,0.4),0 0 12px rgba(56,189,248,0.1) !important;
+    border:1px solid var(--border2) !important;
 }
-.stTabs [data-baseweb="tab-highlight"],
-.stTabs [data-baseweb="tab-border"] { display: none !important; }
+.stTabs [data-baseweb="tab-highlight"],.stTabs [data-baseweb="tab-border"] { display:none !important; }
 
-/* ══════════════════════════════════════════════════════
-   ALERTS
-══════════════════════════════════════════════════════ */
-.stSuccess > div {
-    background: rgba(52,211,153,0.07) !important;
-    border: 1px solid rgba(52,211,153,0.25) !important;
-    border-radius: var(--radius-sm) !important;
-    color: #34d399 !important;
-    font-family: 'Inter', sans-serif !important;
-}
-.stError > div {
-    background: rgba(251,113,133,0.07) !important;
-    border: 1px solid rgba(251,113,133,0.25) !important;
-    border-radius: var(--radius-sm) !important;
-    color: #fb7185 !important;
-}
-.stWarning > div {
-    background: rgba(251,191,36,0.07) !important;
-    border: 1px solid rgba(251,191,36,0.25) !important;
-    border-radius: var(--radius-sm) !important;
-    color: #fbbf24 !important;
-}
-.stInfo > div {
-    background: rgba(56,189,248,0.07) !important;
-    border: 1px solid rgba(56,189,248,0.25) !important;
-    border-radius: var(--radius-sm) !important;
-    color: #38bdf8 !important;
-}
+.stSuccess > div { background:rgba(52,211,153,0.07) !important; border:1px solid rgba(52,211,153,0.25) !important; border-radius:var(--radius-sm) !important; color:#34d399 !important; font-family:'Inter',sans-serif !important; }
+.stError > div   { background:rgba(251,113,133,0.07) !important; border:1px solid rgba(251,113,133,0.25) !important; border-radius:var(--radius-sm) !important; color:#fb7185 !important; }
+.stWarning > div { background:rgba(251,191,36,0.07) !important;  border:1px solid rgba(251,191,36,0.25) !important;  border-radius:var(--radius-sm) !important; color:#fbbf24 !important; }
+.stInfo > div    { background:rgba(56,189,248,0.07) !important;  border:1px solid rgba(56,189,248,0.25) !important;  border-radius:var(--radius-sm) !important; color:#38bdf8 !important; }
 
-/* ══════════════════════════════════════════════════════
-   METRIC CARDS
-══════════════════════════════════════════════════════ */
 .mcard {
-    background: var(--surface2);
-    border: 1px solid var(--border2);
-    border-radius: var(--radius);
-    padding: 22px 16px;
-    text-align: center;
-    transition: all .25s cubic-bezier(.16,1,.3,1);
-    position: relative;
-    overflow: hidden;
+    background:var(--surface2); border:1px solid var(--border2);
+    border-radius:var(--radius); padding:22px 16px; text-align:center;
+    transition:all .25s cubic-bezier(.16,1,.3,1); position:relative; overflow:hidden;
 }
-.mcard::before {
-    content: "";
-    position: absolute; inset: 0;
-    background: radial-gradient(ellipse at 50% 0%, rgba(56,189,248,0.06), transparent 70%);
-    opacity: 0;
-    transition: opacity .3s;
-}
-.mcard::after {
-    content: "";
-    position: absolute; bottom: 0; left: 0; right: 0; height: 2px;
-    background: linear-gradient(90deg, var(--accent), var(--accent2));
-    transform: scaleX(0);
-    transform-origin: center;
-    transition: transform .35s cubic-bezier(.16,1,.3,1);
-}
-.mcard:hover {
-    border-color: var(--border3);
-    box-shadow: var(--glow);
-    transform: translateY(-2px);
-}
-.mcard:hover::before { opacity: 1; }
-.mcard:hover::after  { transform: scaleX(1); }
-.mval {
-    font-family: 'Syne', sans-serif;
-    font-size: 32px;
-    font-weight: 800;
-    line-height: 1.1;
-    background: linear-gradient(135deg, var(--accent) 0%, var(--accent2) 100%);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
-    letter-spacing: -1px;
-}
-.mlbl {
-    font-family: 'IBM Plex Mono', monospace;
-    font-size: 9px;
-    letter-spacing: 2.5px;
-    text-transform: uppercase;
-    color: var(--txt3);
-    margin-top: 6px;
-}
+.mcard::before { content:""; position:absolute; inset:0; background:radial-gradient(ellipse at 50% 0%,rgba(56,189,248,0.06),transparent 70%); opacity:0; transition:opacity .3s; }
+.mcard::after  { content:""; position:absolute; bottom:0; left:0; right:0; height:2px; background:linear-gradient(90deg,var(--accent),var(--accent2)); transform:scaleX(0); transform-origin:center; transition:transform .35s cubic-bezier(.16,1,.3,1); }
+.mcard:hover { border-color:var(--border3); box-shadow:var(--glow); transform:translateY(-2px); }
+.mcard:hover::before { opacity:1; }
+.mcard:hover::after  { transform:scaleX(1); }
+.mval { font-family:'Syne',sans-serif; font-size:32px; font-weight:800; line-height:1.1; background:linear-gradient(135deg,var(--accent) 0%,var(--accent2) 100%); -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text; letter-spacing:-1px; }
+.mlbl { font-family:'IBM Plex Mono',monospace; font-size:9px; letter-spacing:2.5px; text-transform:uppercase; color:var(--txt3); margin-top:6px; }
 
-/* ══════════════════════════════════════════════════════
-   DATAFRAME
-══════════════════════════════════════════════════════ */
-.stDataFrame {
-    border: 1px solid var(--border2) !important;
-    border-radius: var(--radius) !important;
-    overflow: hidden !important;
-    background: var(--bg2) !important;
-}
-.stDataFrame [data-testid="stDataFrameResizable"] {
-    background: var(--bg2) !important;
-}
+.stDataFrame { border:1px solid var(--border2) !important; border-radius:var(--radius) !important; overflow:hidden !important; background:var(--bg2) !important; }
+.stDataFrame [data-testid="stDataFrameResizable"] { background:var(--bg2) !important; }
 
-/* ══════════════════════════════════════════════════════
-   CHECKBOX
-══════════════════════════════════════════════════════ */
-.stCheckbox > label {
-    font-family: 'Inter', sans-serif !important;
-    font-size: 13px !important;
-    color: var(--txt2) !important;
-}
-.stCheckbox > label:hover {
-    color: var(--txt) !important;
-}
+.stCheckbox > label { font-family:'Inter',sans-serif !important; font-size:13px !important; color:var(--txt2) !important; }
+.stCheckbox > label:hover { color:var(--txt) !important; }
+.stSpinner > div { border-color:var(--accent) transparent transparent transparent !important; }
 
-/* ══════════════════════════════════════════════════════
-   SPINNER
-══════════════════════════════════════════════════════ */
-.stSpinner > div {
-    border-color: var(--accent) transparent transparent transparent !important;
-}
+::-webkit-scrollbar { width:4px; height:4px; }
+::-webkit-scrollbar-track { background:var(--bg2); }
+::-webkit-scrollbar-thumb { background:var(--bg4); border-radius:4px; transition:background .2s; }
+::-webkit-scrollbar-thumb:hover { background:var(--accent); }
 
-/* ══════════════════════════════════════════════════════
-   SCROLLBAR
-══════════════════════════════════════════════════════ */
-::-webkit-scrollbar { width: 4px; height: 4px; }
-::-webkit-scrollbar-track { background: var(--bg2); }
-::-webkit-scrollbar-thumb {
-    background: var(--bg4);
-    border-radius: 4px;
-    transition: background .2s;
-}
-::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+.div { height:1px; background:linear-gradient(90deg,transparent,var(--border2),transparent); margin:20px 0; }
 
-/* ══════════════════════════════════════════════════════
-   DIVIDER
-══════════════════════════════════════════════════════ */
-.div {
-    height: 1px;
-    background: linear-gradient(90deg, transparent, var(--border2), transparent);
-    margin: 20px 0;
-}
-
-/* ══════════════════════════════════════════════════════
-   ANIMATED BOTTOM BAR
-══════════════════════════════════════════════════════ */
 #pulse-bar {
-    position: fixed; bottom: 0; left: 0; right: 0;
-    height: 2px; z-index: 9999;
-    background: linear-gradient(90deg,
-        #38bdf8, #818cf8, #34d399, #fbbf24, #fb7185, #38bdf8);
-    background-size: 400% auto;
-    animation: barFlow 8s linear infinite;
+    position:fixed; bottom:0; left:0; right:0; height:2px; z-index:9999;
+    background:linear-gradient(90deg,#38bdf8,#818cf8,#34d399,#fbbf24,#fb7185,#38bdf8);
+    background-size:400% auto; animation:barFlow 8s linear infinite;
 }
-@keyframes barFlow {
-    0%   { background-position: 0% center; }
-    100% { background-position: 400% center; }
-}
+@keyframes barFlow { 0%{background-position:0% center} 100%{background-position:400% center} }
 
-/* ══════════════════════════════════════════════════════
-   AUTH CARD
-══════════════════════════════════════════════════════ */
 .auth-card {
-    background: var(--surface);
-    border: 1px solid var(--border2);
-    border-radius: 18px;
-    padding: 36px 40px;
-    backdrop-filter: blur(24px);
-    -webkit-backdrop-filter: blur(24px);
-    box-shadow: var(--shadow-lg), 0 0 60px rgba(56,189,248,0.05);
-    animation: authIn .5s cubic-bezier(.16,1,.3,1) both;
-    position: relative;
-    overflow: hidden;
+    background:var(--surface); border:1px solid var(--border2); border-radius:18px;
+    padding:36px 40px; backdrop-filter:blur(24px); -webkit-backdrop-filter:blur(24px);
+    box-shadow:var(--shadow-lg),0 0 60px rgba(56,189,248,0.05);
+    animation:authIn .5s cubic-bezier(.16,1,.3,1) both; position:relative; overflow:hidden;
 }
-.auth-card::before {
-    content: "";
-    position: absolute; top: 0; left: 0; right: 0; height: 1px;
-    background: linear-gradient(90deg, transparent, rgba(56,189,248,0.5), transparent);
-}
-@keyframes authIn {
-    from { opacity:0; transform: translateY(24px) scale(.97); }
-    to   { opacity:1; transform: translateY(0) scale(1); }
-}
+.auth-card::before { content:""; position:absolute; top:0; left:0; right:0; height:1px; background:linear-gradient(90deg,transparent,rgba(56,189,248,0.5),transparent); }
+@keyframes authIn { from{opacity:0;transform:translateY(24px) scale(.97)} to{opacity:1;transform:translateY(0) scale(1)} }
 
-/* ══════════════════════════════════════════════════════
-   GOOGLE BUTTON
-══════════════════════════════════════════════════════ */
 .g-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 10px;
-    background: var(--bg3);
-    border: 1px solid var(--border2);
-    border-radius: var(--radius-sm);
-    padding: 13px 20px;
-    color: var(--txt2);
-    font-family: 'Inter', sans-serif;
-    font-size: 14px;
-    font-weight: 500;
-    cursor: pointer;
-    transition: all .25s cubic-bezier(.16,1,.3,1);
-    text-decoration: none;
-    width: 100%;
-    text-align: center;
-    box-shadow: var(--shadow);
+    display:flex; align-items:center; justify-content:center; gap:10px;
+    background:var(--bg3); border:1px solid var(--border2); border-radius:var(--radius-sm);
+    padding:13px 20px; color:var(--txt2); font-family:'Inter',sans-serif; font-size:14px;
+    font-weight:500; cursor:pointer; transition:all .25s cubic-bezier(.16,1,.3,1);
+    text-decoration:none; width:100%; text-align:center; box-shadow:var(--shadow);
 }
-.g-btn:hover {
-    background: var(--bg4);
-    color: var(--txt);
-    border-color: var(--border3);
-    box-shadow: var(--shadow-lg);
-    text-decoration: none;
-    transform: translateY(-1px);
-}
+.g-btn:hover { background:var(--bg4); color:var(--txt); border-color:var(--border3); box-shadow:var(--shadow-lg); text-decoration:none; transform:translateY(-1px); }
 
-/* ══════════════════════════════════════════════════════
-   HERO ANIMATIONS
-══════════════════════════════════════════════════════ */
-.hero-title { animation: heroIn .7s cubic-bezier(.16,1,.3,1) both; }
-.hero-sub   { animation: heroIn .7s cubic-bezier(.16,1,.3,1) .2s both; }
-.hero-badge { animation: heroIn .7s cubic-bezier(.16,1,.3,1) .05s both; }
-@keyframes heroIn {
-    from { opacity:0; transform: translateY(-16px); }
-    to   { opacity:1; transform: translateY(0); }
-}
+.hero-title { animation:heroIn .7s cubic-bezier(.16,1,.3,1) both; }
+.hero-sub   { animation:heroIn .7s cubic-bezier(.16,1,.3,1) .2s both; }
+.hero-badge { animation:heroIn .7s cubic-bezier(.16,1,.3,1) .05s both; }
+@keyframes heroIn { from{opacity:0;transform:translateY(-16px)} to{opacity:1;transform:translateY(0)} }
 
-/* ══════════════════════════════════════════════════════
-   PLOTLY CHARTS — DARK OVERRIDE
-══════════════════════════════════════════════════════ */
-.js-plotly-plot .plotly, .plot-container {
-    background: transparent !important;
-}
-.js-plotly-plot .plotly .bg {
-    fill: transparent !important;
-}
-
-/* ══════════════════════════════════════════════════════
-   SELECTION HIGHLIGHT
-══════════════════════════════════════════════════════ */
-::selection {
-    background: rgba(56,189,248,0.2);
-    color: var(--txt);
-}
-
-/* ══════════════════════════════════════════════════════
-   FOCUS RING
-══════════════════════════════════════════════════════ */
-*:focus-visible {
-    outline: 2px solid rgba(56,189,248,0.4) !important;
-    outline-offset: 2px !important;
-}
+.js-plotly-plot .plotly,.plot-container { background:transparent !important; }
+.js-plotly-plot .plotly .bg { fill:transparent !important; }
+::selection { background:rgba(56,189,248,0.2); color:var(--txt); }
+*:focus-visible { outline:2px solid rgba(56,189,248,0.4) !important; outline-offset:2px !important; }
 </style>
 <div id="pulse-bar"></div>
 """, unsafe_allow_html=True)
@@ -696,7 +388,6 @@ for k, v in [("logged_in",False),("user_info",{}),("auth_mode","login"),
 # ─────────────────────────────────────────────────────────────────────────────
 if not st.session_state.logged_in:
 
-    # Handle Google OAuth callback
     params = st.query_params
     if "code" in params and GOOGLE_CLIENT_ID:
         from auth.auth_manager import exchange_google_code
@@ -706,7 +397,6 @@ if not st.session_state.logged_in:
             st.session_state.user_info = {"name":ui.get("name","Google User"),"email":ui.get("email",""),"role":"user","avatar":"🌐"}
             st.query_params.clear(); st.rerun()
 
-    # ── Hero ──────────────────────────────────────────────────────────────────
     st.markdown("""
     <div style="text-align:center;padding:60px 20px 48px;">
         <div class="hero-badge" style="display:inline-flex;align-items:center;gap:8px;
@@ -737,11 +427,8 @@ if not st.session_state.logged_in:
     </style>
     """, unsafe_allow_html=True)
 
-    # ── Auth panel ────────────────────────────────────────────────────────────
     _, cc, _ = st.columns([1, 1.2, 1])
     with cc:
-        #st.markdown("<div class='auth-card'>", unsafe_allow_html=True)
-
         col_a, col_b = st.columns(2)
         with col_a:
             if st.button("Sign In", key="tab_login"):
@@ -792,9 +479,9 @@ if not st.session_state.logged_in:
                      Join Pulse Sentiment AI</div>
             </div>""", unsafe_allow_html=True)
 
-            su_name  = st.text_input("Full Name",  placeholder="Full name",          key="su_name")
-            su_email = st.text_input("Email",       placeholder="Email address",      key="su_email")
-            su_user  = st.text_input("Username",    placeholder="Choose a username",  key="su_user")
+            su_name  = st.text_input("Full Name",  placeholder="Full name",         key="su_name")
+            su_email = st.text_input("Email",       placeholder="Email address",     key="su_email")
+            su_user  = st.text_input("Username",    placeholder="Choose a username", key="su_user")
             su_pass  = st.text_input("Password",    type="password", placeholder="Min 4 characters", key="su_pass")
 
             c1, _ = st.columns(2)
@@ -841,7 +528,6 @@ else:
     uname  = user.get("name", "User")
     avatar = user.get("avatar", "👤")
 
-    # ── Top Nav ───────────────────────────────────────────────────────────────
     col_t, col_u = st.columns([6, 1])
     with col_t:
         st.markdown(f"""
@@ -868,7 +554,6 @@ else:
 
     st.markdown("<div class='div'></div>", unsafe_allow_html=True)
 
-    # ── TABS ──────────────────────────────────────────────────────────────────
     t1, t2, t3, t4, t5 = st.tabs(["Analysis","Live Probe","Platforms","Data","About"])
 
     # ══════════════════════════════════════════════════════════════════════════
@@ -905,12 +590,11 @@ else:
             @st.cache_resource
             def _cached_train(cleaned_hash, scheme, use_dl, use_tr):
                 df = _cached_preprocess(_get_csv_hash(), scheme)
-                return train_models(df["Cleaned"], df["Sentiment"], use_dl=use_dl, use_transformers=use_tr, df_meta=df)
+                return train_models(df["Cleaned"], df["Sentiment"],
+                        use_dl=use_dl, use_transformers=use_tr, df_meta=df)
 
             with st.spinner("Step 2 / 2 — Training & benchmarking all models…"):
-                results, best_name = _cached_train(
-                _get_csv_hash(), scheme, use_dl, use_tr
-            )
+                results, best_name = _cached_train(_get_csv_hash(), scheme, use_dl, use_tr)
             metrics = results
 
             st.session_state.df_store        = df
@@ -963,7 +647,13 @@ else:
                 st.markdown("<div class='card'>", unsafe_allow_html=True)
                 st.markdown("<div class='label'>By Platform</div>", unsafe_allow_html=True)
                 if "Source" in df.columns:
-                    ss = df.groupby(["Source","Sentiment"]).size().reset_index(name="Count")
+                    # ── Filter to current 4 sources only ──────────────────────
+                    # Excludes old Twitter/Instagram rows still in data.csv
+                    valid_sources = ["YouTube", "News App", "Google News", "Hindi News"]
+                    df_plot = df[df["Source"].isin(valid_sources)]
+                    if len(df_plot) == 0:
+                        df_plot = df  # fallback if new data not yet fetched
+                    ss = df_plot.groupby(["Source","Sentiment"]).size().reset_index(name="Count")
                     fig_bar = px.bar(ss, x="Source", y="Count", color="Sentiment", barmode="group",
                         color_discrete_map={"Positive":"#34d399","Negative":"#fb7185","Neutral":"#fbbf24","Sarcasm":"#a78bfa"})
                     fig_bar.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
@@ -979,9 +669,9 @@ else:
                 st.markdown("<div class='card'>", unsafe_allow_html=True)
                 st.markdown("<div class='label'>Language Breakdown</div>", unsafe_allow_html=True)
                 if "Lang" in df.columns:
-                    lc = df["Lang"].value_counts()
+                    lc   = df["Lang"].value_counts()
                     lmap = {"en":"English","hi":"Hindi","hinglish":"Hinglish","ta":"Tamil","te":"Telugu","bn":"Bengali"}
-                    lc = lc.rename(index=lambda x: lmap.get(x, x.upper()))
+                    lc   = lc.rename(index=lambda x: lmap.get(x, x.upper()))
                     fig_lang = px.bar(x=lc.index, y=lc.values, color=lc.values,
                         color_continuous_scale=["#38bdf8","#818cf8","#34d399"],
                         labels={"x":"","y":"Count","color":"Count"})
@@ -1010,11 +700,16 @@ else:
             if "Source" in df.columns and df["Source"].nunique() > 1:
                 st.markdown("<div class='card'>", unsafe_allow_html=True)
                 st.markdown("<div class='label'>Platform × Sentiment Heatmap</div>", unsafe_allow_html=True)
-                srcs  = df["Source"].unique().tolist()
+                # Only show current 4 platforms in heatmap
+                valid_sources = ["YouTube", "News App", "Google News", "Hindi News"]
+                df_heat = df[df["Source"].isin(valid_sources)]
+                if len(df_heat) == 0:
+                    df_heat = df
+                srcs  = df_heat["Source"].unique().tolist()
                 sents = ["Positive","Negative","Neutral"]
                 z, t  = [], []
                 for s in srcs:
-                    sub = df[df["Source"]==s]["Sentiment"].value_counts(normalize=True).mul(100)
+                    sub = df_heat[df_heat["Source"]==s]["Sentiment"].value_counts(normalize=True).mul(100)
                     row = [round(sub.get(x,0),1) for x in sents]
                     z.append(row); t.append([f"{v}%" for v in row])
                 fig_heat = go.Figure(go.Heatmap(z=z, x=sents, y=srcs, text=t, texttemplate="%{text}",
@@ -1028,18 +723,15 @@ else:
             st.markdown("<div class='card'>", unsafe_allow_html=True)
             st.markdown("<div class='label'>Model Benchmarks</div>", unsafe_allow_html=True)
 
-            ran_models    = {k:v for k,v in metrics.items() if v.get("accuracy",0) > 0}
             failed_models = {k:v for k,v in metrics.items() if v.get("accuracy",0) == 0 and not v.get("available",True)}
-
             used_dl = st.session_state.get("used_dl", False)
             used_tr = st.session_state.get("used_tr", False)
             if used_dl or used_tr:
                 libs = []
                 if used_dl: libs.append("TensorFlow (LSTM · BiLSTM · CNN)")
                 if used_tr: libs.append("Transformers (ALBERT · DistilBERT · mBERT)")
-                not_installed = [l for l in libs if l]
                 if failed_models:
-                    st.info(f"Some models could not run — library may not be installed: {' · '.join(not_installed)}. Install with: pip install tensorflow transformers")
+                    st.info(f"Some models could not run — library may not be installed: {' · '.join(libs)}. Install with: pip install tensorflow transformers")
 
             mhtml = ""
             for mn, md in sorted(metrics.items(), key=lambda x: -x[1].get("accuracy", 0)):
@@ -1049,10 +741,8 @@ else:
                 ib = mn == best_name
                 mt = md.get("type", "Classical ML")
                 TYPE_COLORS_HEX = {
-                    "Classical ML":     "#38bdf8",
-                    "NLP/Lexicon":      "#34d399",
-                    "Deep Learning":    "#818cf8",
-                    "Transformer/BERT": "#fbbf24",
+                    "Classical ML":"#38bdf8","NLP/Lexicon":"#34d399",
+                    "Deep Learning":"#818cf8","Transformer/BERT":"#fbbf24",
                 }
                 tc  = TYPE_COLORS_HEX.get(mt, "#38bdf8")
                 spd = f"{md.get('speed_ms',0):.0f}ms" if md.get("speed_ms",0) > 0 else "—"
@@ -1062,59 +752,33 @@ else:
                         f'<div style="display:flex;align-items:center;justify-content:space-between;'
                         f'background:#0d1420;border:1px solid rgba(56,189,248,0.06);'
                         f'border-radius:10px;padding:13px 18px;margin-bottom:8px;opacity:0.45;">'
-                        f'<div>'
-                        f'<div style="display:flex;align-items:center;gap:8px;margin-bottom:3px;">'
+                        f'<div><div style="display:flex;align-items:center;gap:8px;margin-bottom:3px;">'
                         f'<span style="font-family:Syne,sans-serif;font-size:14px;font-weight:600;color:#4a6380;">{mn}</span>'
-                        f'<span style="background:{tc}15;border:1px solid {tc}25;color:{tc};'
-                        f'border-radius:100px;padding:1px 9px;font-family:IBM Plex Mono,monospace;'
-                        f'font-size:9px;letter-spacing:1px;">{mt}</span>'
-                        f'<span style="background:rgba(251,113,133,0.08);border:1px solid rgba(251,113,133,0.2);'
-                        f'color:#fb7185;border-radius:100px;padding:1px 9px;'
-                        f'font-family:IBM Plex Mono,monospace;font-size:9px;">NOT INSTALLED</span>'
-                        f'</div>'
-                        f'<div style="font-family:IBM Plex Mono,monospace;font-size:10px;color:#2a3a50;">'
-                        f'Library not available — install to enable</div>'
-                        f'</div>'
-                        f'<div style="font-size:18px;font-weight:700;color:#2a3a50;font-family:Syne,sans-serif;">—</div>'
-                        f'</div>'
+                        f'<span style="background:{tc}15;border:1px solid {tc}25;color:{tc};border-radius:100px;padding:1px 9px;font-family:IBM Plex Mono,monospace;font-size:9px;letter-spacing:1px;">{mt}</span>'
+                        f'<span style="background:rgba(251,113,133,0.08);border:1px solid rgba(251,113,133,0.2);color:#fb7185;border-radius:100px;padding:1px 9px;font-family:IBM Plex Mono,monospace;font-size:9px;">NOT INSTALLED</span>'
+                        f'</div><div style="font-family:IBM Plex Mono,monospace;font-size:10px;color:#2a3a50;">Library not available — install to enable</div></div>'
+                        f'<div style="font-size:18px;font-weight:700;color:#2a3a50;font-family:Syne,sans-serif;">—</div></div>'
                     )
                     continue
 
                 bdr = ("border-color:rgba(52,211,153,0.3);background:rgba(52,211,153,0.03);"
                        if ib else "border-color:rgba(56,189,248,0.1);background:#0d1420;")
-                bdg = ("<span style='background:rgba(52,211,153,0.1);border:1px solid rgba(52,211,153,0.25);"
-                       "color:#34d399;border-radius:100px;padding:2px 10px;"
-                       "font-family:IBM Plex Mono,monospace;font-size:9px;letter-spacing:1px;'>BEST</span>"
+                bdg = ("<span style='background:rgba(52,211,153,0.1);border:1px solid rgba(52,211,153,0.25);color:#34d399;border-radius:100px;padding:2px 10px;font-family:IBM Plex Mono,monospace;font-size:9px;letter-spacing:1px;'>BEST</span>"
                        if ib else "")
-
-                row_acc  = acc
-                row_f1   = md.get('f1', 0)
-                row_prec = md.get('precision', 0)
-                row_rec  = md.get('recall', 0)
 
                 mhtml += (
                     f'<div style="display:flex;align-items:center;justify-content:space-between;'
-                    f'border:1px solid;border-radius:10px;padding:14px 20px;margin-bottom:8px;'
-                    f'{bdr}transition:all .25s;cursor:default;">'
-                    f'<div>'
-                    f'<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">'
+                    f'border:1px solid;border-radius:10px;padding:14px 20px;margin-bottom:8px;{bdr}transition:all .25s;cursor:default;">'
+                    f'<div><div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">'
                     f'<span style="font-family:Syne,sans-serif;font-size:14px;font-weight:700;color:#e8eef8;">{mn}</span>'
-                    f'<span style="background:{tc}12;border:1px solid {tc}22;color:{tc};'
-                    f'border-radius:100px;padding:2px 10px;font-family:IBM Plex Mono,monospace;'
-                    f'font-size:8.5px;letter-spacing:1px;">{mt}</span>'
-                    f'</div>'
-                    f'<div style="font-family:IBM Plex Mono,monospace;font-size:9.5px;color:#4a6380;">'
-                    f'F1 {row_f1}% &nbsp;&middot;&nbsp; Precision {row_prec}% &nbsp;&middot;&nbsp; Recall {row_rec}% &nbsp;&middot;&nbsp; {spd}'
-                    f'</div>'
-                    f'</div>'
-                    f'<div style="display:flex;align-items:center;gap:10px;">'
-                    f'{bdg}'
+                    f'<span style="background:{tc}12;border:1px solid {tc}22;color:{tc};border-radius:100px;padding:2px 10px;font-family:IBM Plex Mono,monospace;font-size:8.5px;letter-spacing:1px;">{mt}</span>'
+                    f'</div><div style="font-family:IBM Plex Mono,monospace;font-size:9.5px;color:#4a6380;">'
+                    f'F1 {md.get("f1",0)}% &nbsp;&middot;&nbsp; Precision {md.get("precision",0)}% &nbsp;&middot;&nbsp; Recall {md.get("recall",0)}% &nbsp;&middot;&nbsp; {spd}'
+                    f'</div></div>'
+                    f'<div style="display:flex;align-items:center;gap:10px;">{bdg}'
                     f'<div style="font-family:Syne,sans-serif;font-size:24px;font-weight:800;'
-                    f'background:linear-gradient(135deg,#38bdf8,#818cf8);'
-                    f'-webkit-background-clip:text;-webkit-text-fill-color:transparent;'
-                    f'background-clip:text;">{row_acc}%</div>'
-                    f'</div>'
-                    f'</div>'
+                    f'background:linear-gradient(135deg,#38bdf8,#818cf8);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;">{acc}%</div>'
+                    f'</div></div>'
                 )
 
             st.markdown(mhtml, unsafe_allow_html=True)
@@ -1123,10 +787,8 @@ else:
             if avail:
                 fig_cmp = px.bar(x=list(avail.keys()), y=[v["accuracy"] for v in avail.values()],
                     color=[v.get("type","Classical ML") for v in avail.values()],
-                    color_discrete_map={
-                        "Classical ML":"#38bdf8","NLP/Lexicon":"#34d399",
-                        "Deep Learning":"#818cf8","Transformer/BERT":"#fbbf24"
-                    }, labels={"x":"","y":"Accuracy (%)","color":"Type"})
+                    color_discrete_map={"Classical ML":"#38bdf8","NLP/Lexicon":"#34d399","Deep Learning":"#818cf8","Transformer/BERT":"#fbbf24"},
+                    labels={"x":"","y":"Accuracy (%)","color":"Type"})
                 fig_cmp.add_hline(y=max(v["accuracy"] for v in avail.values()),
                     line_dash="dot", line_color="#34d399", opacity=0.5)
                 fig_cmp.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
@@ -1147,10 +809,8 @@ else:
             st.markdown("""
             <div style="text-align:center;padding:80px 20px;">
                 <div style="font-size:36px;margin-bottom:14px;opacity:.4;">📊</div>
-                <div style="font-family:'Syne',sans-serif;font-size:17px;font-weight:700;
-                     color:#8fa8c8;margin-bottom:8px;">Select a scheme and run analysis</div>
-                <div style="font-family:'Inter',sans-serif;font-size:13px;color:#4a6380;">
-                     Choose from 40 government schemes and click Run Analysis to begin</div>
+                <div style="font-family:'Syne',sans-serif;font-size:17px;font-weight:700;color:#8fa8c8;margin-bottom:8px;">Select a scheme and run analysis</div>
+                <div style="font-family:'Inter',sans-serif;font-size:13px;color:#4a6380;">Choose from 40 government schemes and click Run Analysis to begin</div>
             </div>""", unsafe_allow_html=True)
 
     # ══════════════════════════════════════════════════════════════════════════
@@ -1167,10 +827,8 @@ else:
                  background:rgba(52,211,153,0.07);border:1px solid rgba(52,211,153,0.2);
                  border-radius:8px;padding:7px 16px;margin-bottom:16px;">
               <span style="width:6px;height:6px;border-radius:50%;background:#34d399;
-                    box-shadow:0 0 8px #34d399;display:inline-block;
-                    animation:livePulse 2s ease infinite;"></span>
-              <span style="font-family:'IBM Plex Mono',monospace;font-size:9.5px;
-                    color:#34d399;letter-spacing:2px;">
+                    box-shadow:0 0 8px #34d399;display:inline-block;animation:livePulse 2s ease infinite;"></span>
+              <span style="font-family:'IBM Plex Mono',monospace;font-size:9.5px;color:#34d399;letter-spacing:2px;">
                 ACTIVE MODEL: {st.session_state.best_name_store.upper()}
               </span>
             </div>
@@ -1181,10 +839,8 @@ else:
             <div style="display:inline-flex;align-items:center;gap:8px;
                  background:rgba(251,191,36,0.07);border:1px solid rgba(251,191,36,0.2);
                  border-radius:8px;padding:7px 16px;margin-bottom:16px;">
-              <span style="width:6px;height:6px;border-radius:50%;background:#fbbf24;
-                    display:inline-block;"></span>
-              <span style="font-family:'IBM Plex Mono',monospace;font-size:9.5px;
-                    color:#fbbf24;letter-spacing:2px;">
+              <span style="width:6px;height:6px;border-radius:50%;background:#fbbf24;display:inline-block;"></span>
+              <span style="font-family:'IBM Plex Mono',monospace;font-size:9.5px;color:#fbbf24;letter-spacing:2px;">
                 USING FALLBACK — Run Analysis first to activate best ML model
               </span>
             </div>""", unsafe_allow_html=True)
@@ -1216,20 +872,17 @@ else:
             st.markdown(f"""
             <div style="margin:20px 0;padding:32px;border-radius:14px;
                  background:linear-gradient(135deg,rgba(13,20,32,0.9),rgba(18,26,40,0.7));
-                 border:1px solid {clr}30;text-align:center;
-                 box-shadow:0 0 30px {clr}10;">
+                 border:1px solid {clr}30;text-align:center;box-shadow:0 0 30px {clr}10;">
               <div style="font-family:'Syne',sans-serif;font-size:42px;font-weight:800;
-                   color:{clr};letter-spacing:-1.5px;margin-bottom:10px;
-                   text-shadow:0 0 30px {clr}40;">
+                   color:{clr};letter-spacing:-1.5px;margin-bottom:10px;text-shadow:0 0 30px {clr}40;">
                 {ico} {sent}
               </div>
-              <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;
-                   color:#4a6380;letter-spacing:2px;">
-                {conf}% CONFIDENCE &nbsp;·&nbsp; {model_used[:32]}
+              <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#4a6380;letter-spacing:2px;">
+                {conf}% CONFIDENCE &nbsp;·&nbsp; {model_used[:40]}
               </div>
             </div>""", unsafe_allow_html=True)
 
-            d1, d2, d3, d4   = st.columns(4)
+            d1, d2, d3, d4 = st.columns(4)
             lang_display = lang.upper() if lang else "EN"
             sarc_display = f"Detected ({ss}%)" if sarc else f"None ({ss}%)"
             sarc_color   = "#fb7185" if sarc else "#34d399"
@@ -1241,8 +894,7 @@ else:
                 ("Signal",     "Sarcasm ✓" if sarc else "Clean ✓", "#34d399"),
             ]):
                 col.markdown(f"""<div class="mcard">
-                    <div style="font-size:14px;font-weight:600;color:{c};
-                         font-family:'Inter',sans-serif;margin-bottom:5px;">{val}</div>
+                    <div style="font-size:14px;font-weight:600;color:{c};font-family:'Inter',sans-serif;margin-bottom:5px;">{val}</div>
                     <div class="mlbl">{lbl}</div>
                 </div>""", unsafe_allow_html=True)
 
@@ -1253,8 +905,7 @@ else:
                   <div style="font-family:'IBM Plex Mono',monospace;font-size:9px;color:#38bdf8;
                        letter-spacing:2.5px;text-transform:uppercase;margin-bottom:7px;">
                        Translated ({lang.upper()} → EN)</div>
-                  <div style="font-family:'Inter',sans-serif;font-size:14px;
-                       color:#8fa8c8;font-style:italic;">"{translated}"</div>
+                  <div style="font-family:'Inter',sans-serif;font-size:14px;color:#8fa8c8;font-style:italic;">"{translated}"</div>
                 </div>""", unsafe_allow_html=True)
 
         elif probe:
@@ -1275,13 +926,10 @@ else:
         for col, (lbl, txt) in zip(ec, exs):
             c = cmap2.get(lbl, "#8fa8c8")
             col.markdown(f"""
-            <div style="background:var(--bg3);border:1px solid var(--border);
-                 border-top:2px solid {c};border-radius:10px;padding:14px;
-                 transition:border-color .2s;cursor:default;">
-              <div style="font-family:'IBM Plex Mono',monospace;font-size:8.5px;color:{c};
-                   letter-spacing:2px;text-transform:uppercase;margin-bottom:7px;">{lbl}</div>
-              <div style="font-family:'Inter',sans-serif;font-size:12px;
-                   color:#8fa8c8;line-height:1.6;">{txt[:70]}{"…" if len(txt)>70 else ""}</div>
+            <div style="background:var(--bg3);border:1px solid var(--border);border-top:2px solid {c};
+                 border-radius:10px;padding:14px;transition:border-color .2s;cursor:default;">
+              <div style="font-family:'IBM Plex Mono',monospace;font-size:8.5px;color:{c};letter-spacing:2px;text-transform:uppercase;margin-bottom:7px;">{lbl}</div>
+              <div style="font-family:'Inter',sans-serif;font-size:12px;color:#8fa8c8;line-height:1.6;">{txt[:70]}{"…" if len(txt)>70 else ""}</div>
             </div>""", unsafe_allow_html=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
@@ -1292,36 +940,52 @@ else:
         st.markdown("<div class='card'>", unsafe_allow_html=True)
         st.markdown("<div class='label'>Cross-Platform Sentiment Comparison</div>", unsafe_allow_html=True)
 
+        # ── Source info box ───────────────────────────────────────────────────
+        st.markdown("""
+        <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:18px;">
+          <div style="background:rgba(56,189,248,0.07);border:1px solid rgba(56,189,248,0.2);border-radius:8px;padding:8px 14px;font-family:'IBM Plex Mono',monospace;font-size:9px;color:#38bdf8;letter-spacing:1.5px;">▶ YouTube — Official API</div>
+          <div style="background:rgba(52,211,153,0.07);border:1px solid rgba(52,211,153,0.2);border-radius:8px;padding:8px 14px;font-family:'IBM Plex Mono',monospace;font-size:9px;color:#34d399;letter-spacing:1.5px;">▶ News App — Official API</div>
+          <div style="background:rgba(129,140,248,0.07);border:1px solid rgba(129,140,248,0.2);border-radius:8px;padding:8px 14px;font-family:'IBM Plex Mono',monospace;font-size:9px;color:#818cf8;letter-spacing:1.5px;">▶ Google News — RSS Feed</div>
+          <div style="background:rgba(251,191,36,0.07);border:1px solid rgba(251,191,36,0.2);border-radius:8px;padding:8px 14px;font-family:'IBM Plex Mono',monospace;font-size:9px;color:#fbbf24;letter-spacing:1.5px;">▶ Hindi News — RSS Feed</div>
+        </div>""", unsafe_allow_html=True)
+
         if st.session_state.df_store is not None:
             df = st.session_state.df_store
-            if "Source" in df.columns and df["Source"].nunique() > 1:
-                ps = df.groupby("Source")["Sentiment"].value_counts(normalize=True).mul(100).round(1).unstack(fill_value=0).reset_index()
+
+            # Filter to only current 4 sources
+            valid_sources = ["YouTube", "News App", "Google News", "Hindi News"]
+            df_plat = df[df["Source"].isin(valid_sources)]
+            if len(df_plat) == 0:
+                df_plat = df  # fallback
+
+            if "Source" in df_plat.columns and df_plat["Source"].nunique() > 1:
+                ps = df_plat.groupby("Source")["Sentiment"].value_counts(normalize=True).mul(100).round(1).unstack(fill_value=0).reset_index()
                 st.dataframe(ps, use_container_width=True, hide_index=True)
 
-                srcs  = df["Source"].unique().tolist()
+                srcs  = df_plat["Source"].unique().tolist()
                 sents = ["Positive","Negative","Neutral"]
                 z, t  = [], []
                 for s in srcs:
-                    sub = df[df["Source"]==s]["Sentiment"].value_counts(normalize=True).mul(100)
+                    sub = df_plat[df_plat["Source"]==s]["Sentiment"].value_counts(normalize=True).mul(100)
                     row = [round(sub.get(x,0),1) for x in sents]
                     z.append(row); t.append([f"{v}%" for v in row])
-                fh = go.Figure(go.Heatmap(z=z,x=sents,y=srcs,text=t,texttemplate="%{text}",
-                    colorscale=[[0,"#080c14"],[0.4,"#0ea5e9"],[1,"#34d399"]],showscale=True))
-                fh.update_layout(paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)",
-                    font_color="#8fa8c8",margin=dict(t=10,b=10,l=10,r=10),height=300)
+                fh = go.Figure(go.Heatmap(z=z, x=sents, y=srcs, text=t, texttemplate="%{text}",
+                    colorscale=[[0,"#080c14"],[0.4,"#0ea5e9"],[1,"#34d399"]], showscale=True))
+                fh.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                    font_color="#8fa8c8", margin=dict(t=10,b=10,l=10,r=10), height=300)
                 st.plotly_chart(fh, use_container_width=True, key="fig_plat_heat")
 
-                ss2 = df.groupby(["Source","Sentiment"]).size().reset_index(name="Count")
-                fs  = px.bar(ss2,x="Source",y="Count",color="Sentiment",barmode="group",
+                ss2 = df_plat.groupby(["Source","Sentiment"]).size().reset_index(name="Count")
+                fs  = px.bar(ss2, x="Source", y="Count", color="Sentiment", barmode="group",
                     color_discrete_map={"Positive":"#34d399","Negative":"#fb7185","Neutral":"#fbbf24","Sarcasm":"#a78bfa"})
-                fs.update_layout(paper_bgcolor="rgba(0,0,0,0)",plot_bgcolor="rgba(0,0,0,0)",
-                    font_color="#8fa8c8",legend=dict(bgcolor="rgba(0,0,0,0)",font=dict(color="#8fa8c8")),
-                    xaxis=dict(gridcolor="rgba(56,189,248,0.06)",color="#4a6380"),
-                    yaxis=dict(gridcolor="rgba(56,189,248,0.06)",color="#4a6380"),
-                    margin=dict(t=10,b=10,l=10,r=10),height=300)
+                fs.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                    font_color="#8fa8c8", legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color="#8fa8c8")),
+                    xaxis=dict(gridcolor="rgba(56,189,248,0.06)", color="#4a6380"),
+                    yaxis=dict(gridcolor="rgba(56,189,248,0.06)", color="#4a6380"),
+                    margin=dict(t=10,b=10,l=10,r=10), height=300)
                 st.plotly_chart(fs, use_container_width=True, key="fig_src")
             else:
-                st.info("Run analysis first to see platform comparison.")
+                st.info("Run analysis first — or fetch data from at least 2 sources to see platform comparison.")
         else:
             st.info("Run analysis first to see platform comparison.")
         st.markdown("</div>", unsafe_allow_html=True)
@@ -1332,6 +996,31 @@ else:
     with t4:
         st.markdown("<div class='card'>", unsafe_allow_html=True)
         st.markdown("<div class='label'>Fetch Live Data</div>", unsafe_allow_html=True)
+
+        # ── Source info ───────────────────────────────────────────────────────
+        st.markdown("""
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:10px;margin-bottom:18px;">
+          <div style="background:var(--bg3);border:1px solid var(--border2);border-radius:8px;padding:12px;text-align:center;">
+            <div style="font-size:18px;margin-bottom:4px;">📺</div>
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:8px;color:#38bdf8;letter-spacing:1.5px;">YOUTUBE</div>
+            <div style="font-family:'Inter',sans-serif;font-size:10px;color:#4a6380;margin-top:3px;">Official API · Real-time</div>
+          </div>
+          <div style="background:var(--bg3);border:1px solid var(--border2);border-radius:8px;padding:12px;text-align:center;">
+            <div style="font-size:18px;margin-bottom:4px;">📰</div>
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:8px;color:#34d399;letter-spacing:1.5px;">NEWS APP</div>
+            <div style="font-family:'Inter',sans-serif;font-size:10px;color:#4a6380;margin-top:3px;">Official API · Real-time</div>
+          </div>
+          <div style="background:var(--bg3);border:1px solid var(--border2);border-radius:8px;padding:12px;text-align:center;">
+            <div style="font-size:18px;margin-bottom:4px;">🌐</div>
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:8px;color:#818cf8;letter-spacing:1.5px;">GOOGLE NEWS</div>
+            <div style="font-family:'Inter',sans-serif;font-size:10px;color:#4a6380;margin-top:3px;">RSS Feed · No key needed</div>
+          </div>
+          <div style="background:var(--bg3);border:1px solid var(--border2);border-radius:8px;padding:12px;text-align:center;">
+            <div style="font-size:18px;margin-bottom:4px;">🗞️</div>
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:8px;color:#fbbf24;letter-spacing:1.5px;">HINDI NEWS</div>
+            <div style="font-family:'Inter',sans-serif;font-size:10px;color:#4a6380;margin-top:3px;">RSS Feed · No key needed</div>
+          </div>
+        </div>""", unsafe_allow_html=True)
 
         f1, f2, f3 = st.columns([3, 1, 1])
         with f1:
@@ -1350,43 +1039,90 @@ else:
                     "padding:14px 18px;font-family:IBM Plex Mono,monospace;font-size:11px;color:#8fa8c8;"
                     "line-height:1.9;max-height:180px;overflow-y:auto;'>"
                     + "<br>".join(f"› {x}" for x in ll[-10:]) + "</div>", unsafe_allow_html=True)
-            with st.spinner("Fetching…"):
-                cnts = fetch_all(scheme="All" if "All" in fs else fs, max_per_source=int(mx), progress_callback=_lg)
+            with st.spinner("Fetching from YouTube, NewsAPI, Google News RSS, Hindi News RSS…"):
+                cnts = fetch_all(scheme="All" if "All" in fs else fs,
+                                 max_per_source=int(mx), progress_callback=_lg)
+
             tot = sum(cnts.values())
-            c1,c2,c3,c4 = st.columns(4)
-            for col,(src,cnt) in zip([c1,c2,c3,c4],cnts.items()):
+
+            # ── Show 4 source metric cards ────────────────────────────────────
+            c1, c2, c3, c4 = st.columns(4)
+            source_icons = {"YouTube":"📺", "News App":"📰", "Google News":"🌐", "Hindi News":"🗞️"}
+            for col, (src, cnt) in zip([c1,c2,c3,c4], cnts.items()):
+                icon = source_icons.get(src, "📡")
                 col.markdown(f"""<div class="mcard" style="margin-top:10px;">
-                    <div class="mval">{cnt}</div><div class="mlbl">{src}</div>
+                    <div style="font-size:22px;margin-bottom:4px;">{icon}</div>
+                    <div class="mval" style="font-size:24px;">{cnt}</div>
+                    <div class="mlbl">{src}</div>
                 </div>""", unsafe_allow_html=True)
-            if tot>0: st.success(f"{tot} new rows added to dataset.")
-            else:     st.warning("No data fetched — check API keys in .env")
+
+            if tot > 0:
+                st.success(f"✓ {tot} total items fetched across all sources.")
+            else:
+                st.warning("No data fetched — check YOUTUBE_API_KEY and NEWS_API_KEY in secrets/env. Google News RSS and Hindi News RSS require no keys.")
+
         st.markdown("</div>", unsafe_allow_html=True)
 
+        # ── Dataset Status ────────────────────────────────────────────────────
+        st.markdown("<div class='card'>", unsafe_allow_html=True)
         st.markdown("<div class='label'>Dataset Status</div>", unsafe_allow_html=True)
+
         try:
             ds = pd.read_csv("data/data.csv")
-            d1,d2,d3,d4 = st.columns(4)
-            for col,(v,l,c) in zip([d1,d2,d3,d4],[
-                (len(ds),"Rows","#38bdf8"),
-                (ds["Scheme"].nunique(),"Schemes","#34d399"),
-                (ds["Source"].nunique(),"Sources","#a78bfa"),
-                (ds["Language"].nunique() if "Language" in ds.columns else "—","Languages","#fbbf24"),
+
+            # ── Why schemes may show more than 40 ─────────────────────────────
+            # generate_data.py uses short names ("PMAY", "PM Kisan")
+            # scraper.py uses full names ("PMAY — Pradhan Mantri Awas Yojana")
+            # Both end up in data.csv = more unique scheme values than 40
+            # Solution: shows only count of rows from known full-name schemes
+            known_schemes  = set(ALL_SCHEMES)
+            known_rows     = ds[ds["Scheme"].isin(known_schemes)]
+            unknown_scheme_count = ds["Scheme"].nunique() - len(known_schemes & set(ds["Scheme"].unique()))
+
+            # ── Why sources may show more than 4 ──────────────────────────────
+            # Old data.csv may have Twitter/Instagram rows from previous fetches
+            # Filter display to only current 4 sources
+            valid_sources    = {"YouTube", "News App", "Google News", "Hindi News"}
+            current_src_rows = ds[ds["Source"].isin(valid_sources)]
+
+            d1, d2, d3, d4 = st.columns(4)
+            for col, (v, l, c) in zip([d1,d2,d3,d4],[
+                (len(ds),                               "Total Rows",    "#38bdf8"),
+                (ds["Scheme"].nunique(),                "Scheme Values", "#34d399"),
+                (len(valid_sources & set(ds["Source"].unique())), "Active Sources","#a78bfa"),
+                (ds["Language"].nunique() if "Language" in ds.columns else "—", "Languages", "#fbbf24"),
             ]):
                 col.markdown(f"""<div class="mcard">
                     <div class="mval" style="font-size:26px;">{v}</div>
                     <div class="mlbl">{l}</div>
                 </div>""", unsafe_allow_html=True)
-            sc2  = ds["Source"].value_counts()
-            fs2  = px.bar(x=sc2.index, y=sc2.values, color=sc2.values,
-                color_continuous_scale=["#38bdf8","#818cf8"], labels={"x":"","y":"Count"})
+
+            # Explain scheme count if more than 40
+            if ds["Scheme"].nunique() > 40:
+                st.info(f"ℹ️ Scheme count shows {ds['Scheme'].nunique()} because your data.csv contains both short names (from generate_data.py like 'PMAY') and full names (from scraper.py like 'PMAY — Pradhan Mantri Awas Yojana'). Run generate_data.py again to regenerate with full names only, then re-fetch data.")
+
+            # Explain source count if more than 4
+            old_sources = set(ds["Source"].unique()) - valid_sources
+            if old_sources:
+                st.info(f"ℹ️ Your data.csv still contains {len(old_sources)} old source(s): {', '.join(old_sources)}. These are from previous fetches. They will reduce as you fetch new data. Or delete data.csv and regenerate.")
+
+            # Source chart — show all sources with old ones greyed
+            sc2 = ds["Source"].value_counts()
+            colors = ["#38bdf8" if s in valid_sources else "#2a3a50" for s in sc2.index]
+            fs2 = px.bar(x=sc2.index, y=sc2.values,
+                color=sc2.index.map(lambda x: "Current" if x in valid_sources else "Legacy"),
+                color_discrete_map={"Current":"#38bdf8","Legacy":"#2a3a50"},
+                labels={"x":"","y":"Count","color":"Status"})
             fs2.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                font_color="#8fa8c8", showlegend=False,
+                font_color="#8fa8c8", legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color="#8fa8c8")),
                 xaxis=dict(showgrid=False, color="#4a6380"),
                 yaxis=dict(showgrid=False, showticklabels=False),
                 margin=dict(t=10,b=10,l=5,r=5), height=160)
             st.plotly_chart(fs2, use_container_width=True, key="fig_ds_src")
+
         except FileNotFoundError:
             st.info("No dataset found. Run: python data/generate_data.py")
+
         st.markdown("</div>", unsafe_allow_html=True)
 
     # ══════════════════════════════════════════════════════════════════════════
@@ -1395,11 +1131,8 @@ else:
     with t5:
         st.markdown("""
         <div class="card" style="text-align:center;padding:40px 36px;">
-            <div style="font-family:'IBM Plex Mono',monospace;font-size:9.5px;color:#38bdf8;
-                 letter-spacing:3px;text-transform:uppercase;margin-bottom:16px;">
-                 Final Year Research Project</div>
-            <div style="font-family:'Syne',sans-serif;font-size:22px;font-weight:700;
-                 color:#e8eef8;line-height:1.4;margin-bottom:12px;letter-spacing:-.5px;">
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:9.5px;color:#38bdf8;letter-spacing:3px;text-transform:uppercase;margin-bottom:16px;">Final Year Research Project</div>
+            <div style="font-family:'Syne',sans-serif;font-size:22px;font-weight:700;color:#e8eef8;line-height:1.4;margin-bottom:12px;letter-spacing:-.5px;">
                 Multilingual Multi-Source Sentiment Analysis Framework<br>
                 for Indian Government Schemes Using Adaptive Model Selection
             </div>
@@ -1413,46 +1146,36 @@ else:
              "Most research processes only English text, ignoring India's 22 official languages and Hinglish.",
              "LangDetect + deep-translator pipeline supports English, Hindi, Tamil, Telugu, Bengali, Hinglish, and more. Non-English text is auto-translated before analysis."),
             ("02","Single Platform","#818cf8",
-             "95% of published papers analyse Twitter alone, missing the broader public discourse on YouTube, Instagram, and news platforms.",
-             "Multi-source architecture covers YouTube, Twitter, Instagram, and NewsAPI. Cross-platform comparison visualised in the Platforms tab."),
+             "95% of published papers analyse a single source, missing the broader public discourse across platforms.",
+             "Multi-source architecture covers YouTube (Official API), NewsAPI (Official API), Google News RSS, and Hindi News RSS (Dainik Bhaskar, Amar Ujala, Navbharat Times). Cross-platform comparison in the Platforms tab."),
             ("03","Random Model Selection","#34d399",
              "Researchers arbitrarily select algorithms without benchmarking them against the specific dataset characteristics.",
-             "Adaptive engine trains 7 classical ML models + TextBlob + VADER. Optional LSTM, BiLSTM, CNN, ALBERT, DistilBERT. Best model selected by accuracy; ties broken by inference speed."),
+             "Adaptive engine profiles data volume, sarcasm ratio, language diversity, and avg comment length. Trains 7 classical ML models + TextBlob + VADER. Best model selected by data-aware scoring. Optional LSTM, BiLSTM, CNN, ALBERT, DistilBERT."),
             ("04","Binary Classification","#fbbf24",
              "Most studies output only Positive / Negative, discarding the Neutral class that represents a large portion of real public opinion.",
              "Three-class classification: Positive / Neutral / Negative with per-class F1, Precision, and Recall metrics for each model."),
             ("05","Sarcasm Ignored","#fb7185",
              "Standard sentiment models misclassify sarcastic comments as positive because they read literal word polarity.",
-             "Advanced sarcasm engine: emoji signals, regex irony patterns, capitalisation ratio, punctuation analysis, and Hindi sarcasm markers. Returns a 0–100% confidence score. Sarcastic positives auto-flipped to Negative."),
+             "Advanced sarcasm engine with 30+ pattern rules including Digital India irony, bureaucracy loop detection, amount irony (₹2000 retire), and multilingual Hindi sarcasm phrases. Returns 0–100% confidence. Sarcastic positives auto-flipped to Negative."),
         ]
 
         for gid, title, clr, problem, solution in gaps:
             st.markdown(f"""
             <div class="card" style="border-left:3px solid {clr};padding:24px 28px;margin-bottom:12px;">
               <div style="display:flex;align-items:flex-start;gap:18px;">
-                <div style="min-width:38px;height:38px;border-radius:9px;
-                     background:{clr}10;border:1px solid {clr}22;
-                     display:flex;align-items:center;justify-content:center;
-                     font-family:'IBM Plex Mono',monospace;font-size:11px;
-                     font-weight:500;color:{clr};flex-shrink:0;
-                     box-shadow:0 0 12px {clr}15;">{gid}</div>
+                <div style="min-width:38px;height:38px;border-radius:9px;background:{clr}10;border:1px solid {clr}22;
+                     display:flex;align-items:center;justify-content:center;font-family:'IBM Plex Mono',monospace;
+                     font-size:11px;font-weight:500;color:{clr};flex-shrink:0;box-shadow:0 0 12px {clr}15;">{gid}</div>
                 <div style="flex:1;">
-                  <div style="font-family:'Syne',sans-serif;font-size:16px;font-weight:700;
-                       color:#e8eef8;margin-bottom:12px;letter-spacing:-.3px;">{title}</div>
+                  <div style="font-family:'Syne',sans-serif;font-size:16px;font-weight:700;color:#e8eef8;margin-bottom:12px;letter-spacing:-.3px;">{title}</div>
                   <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;">
                     <div>
-                      <div style="font-family:'IBM Plex Mono',monospace;font-size:8.5px;
-                           color:#4a6380;letter-spacing:2.5px;text-transform:uppercase;
-                           margin-bottom:6px;">Problem</div>
-                      <div style="font-family:'Inter',sans-serif;font-size:13px;
-                           color:#8fa8c8;line-height:1.7;">{problem}</div>
+                      <div style="font-family:'IBM Plex Mono',monospace;font-size:8.5px;color:#4a6380;letter-spacing:2.5px;text-transform:uppercase;margin-bottom:6px;">Problem</div>
+                      <div style="font-family:'Inter',sans-serif;font-size:13px;color:#8fa8c8;line-height:1.7;">{problem}</div>
                     </div>
                     <div>
-                      <div style="font-family:'IBM Plex Mono',monospace;font-size:8.5px;
-                           color:{clr};letter-spacing:2.5px;text-transform:uppercase;
-                           margin-bottom:6px;opacity:0.8;">Solution</div>
-                      <div style="font-family:'Inter',sans-serif;font-size:13px;
-                           color:#e8eef8;line-height:1.7;">{solution}</div>
+                      <div style="font-family:'IBM Plex Mono',monospace;font-size:8.5px;color:{clr};letter-spacing:2.5px;text-transform:uppercase;margin-bottom:6px;opacity:0.8;">Solution</div>
+                      <div style="font-family:'Inter',sans-serif;font-size:13px;color:#e8eef8;line-height:1.7;">{solution}</div>
                     </div>
                   </div>
                 </div>
