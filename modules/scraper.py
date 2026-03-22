@@ -2,54 +2,56 @@
 modules/scraper.py — Pulse Sentiment AI · Real-Time Data Fetcher
 ═══════════════════════════════════════════════════════════════════
 Sources:
-  ✅ YouTube   — comments from scheme-related videos
-  ✅ NewsAPI   — news headlines + descriptions
-  ✅ Twitter   — recent tweets
-  ✅ Instagram — comments from any reel/post URL you paste
-  ❌ Reddit    — removed (API approval issues)
+  ✅ YouTube        — comments from scheme-related videos (Official API)
+  ✅ NewsAPI         — news headlines + descriptions (Official API)
+  ✅ Google News RSS — real-time headlines, no API key needed
+  ✅ Hindi News RSS  — Dainik Bhaskar, Amar Ujala, NBT (no API key needed)
+  ❌ Twitter         — removed (API paid, approval issues)
+  ❌ Instagram       — removed (login issues, scraping unreliable)
+  ❌ Reddit          — removed (API approval issues)
 
-FIXES APPLIED:
+FIXES INTACT:
   ✅ Dedup: _normalise() case-insensitive comparison
   ✅ Dedup: _save_rows() deduplicates batch + CSV
   ✅ Dedup: each fetcher deduplicates its own output
-  ✅ Min comment length 5→15 chars
+  ✅ Min comment length 15 chars
   ✅ Comments labelled at fetch time (not saved as Unknown)
-  ✅ Hinglish language detection added
+  ✅ Hinglish language detection
   ✅ VADER + TextBlob loaded ONCE at module level (not per comment)
-     Your version re-initialised VADER on every single comment
-     = ~0.3s × 300 comments = 90 seconds wasted per fetch
 """
 
 import os, csv, re, time
+import urllib.parse
 import pandas as pd
 from pathlib     import Path
 from dotenv      import load_dotenv
 from collections import Counter
 load_dotenv()
 
-# ── API Keys ──────────────────────────────────────────────────────────────────
+
+# ── Secret loader — works both locally (.env) and on Streamlit Cloud ──────────
 def _get_secret(key: str) -> str:
     try:
         import streamlit as st
         return st.secrets.get(key, os.getenv(key, ""))
-    except:
+    except Exception:
         return os.getenv(key, "")
 
-YOUTUBE_API_KEY      = _get_secret("YOUTUBE_API_KEY")
-NEWS_API_KEY         = _get_secret("NEWS_API_KEY")
-TWITTER_BEARER_TOKEN = _get_secret("TWITTER_BEARER_TOKEN")
+
+# ── API Keys ──────────────────────────────────────────────────────────────────
+YOUTUBE_API_KEY = _get_secret("YOUTUBE_API_KEY")
+NEWS_API_KEY    = _get_secret("NEWS_API_KEY")
 
 DATA_CSV = Path("data/data.csv")
 
-# ── Sentiment tools — loaded ONCE here, reused for every comment ──────────────
-# Your previous version did `from nltk.sentiment.vader import ...` inside
-# _quick_sentiment() which ran on every comment = extremely slow
+
+# ── Sentiment tools — loaded ONCE at module level ─────────────────────────────
 try:
     import nltk
     try:    nltk.data.find("sentiment/vader_lexicon.zip")
     except LookupError: nltk.download("vader_lexicon", quiet=True)
     from nltk.sentiment.vader import SentimentIntensityAnalyzer as _SIA
-    _VADER   = _SIA()    # ← single instance, reused for all comments
+    _VADER   = _SIA()
     VADER_OK = True
 except Exception:
     _VADER   = None
@@ -62,7 +64,8 @@ except Exception:
     _TB         = None
     TEXTBLOB_OK = False
 
-# ── Hindi keyword sets — defined ONCE at module level ─────────────────────────
+
+# ── Hindi keyword sets ────────────────────────────────────────────────────────
 _NEG_HI = {
     "नहीं","बेकार","फर्जी","झूठ","घोटाला","भ्रष्टाचार","धोखा",
     "नाकाम","विफल","समस्या","परेशानी","खराब","बुरा","गलत","अन्याय",
@@ -278,22 +281,16 @@ def _detect_lang(text: str) -> str:
 
 
 def _quick_sentiment(text: str, lang: str) -> str:
-    """
-    Fast sentiment label using module-level singletons.
-    No imports inside this function — everything loaded at startup.
-    """
-    # Hindi/Hinglish keyword prior
+    """Fast sentiment using module-level singletons — no re-imports."""
     if lang in ("hi", "hinglish"):
         neg = sum(1 for w in _NEG_HI if w in text)
         pos = sum(1 for w in _POS_HI if w in text)
         if neg > 0 and neg >= pos: return "Negative"
         if pos > 0 and pos > neg:  return "Positive"
 
-    # Sarcasm emoji → Negative
     if any(e in text for e in _SARC_EMOJIS):
         return "Negative"
 
-    # TextBlob
     tb_vote = None
     if TEXTBLOB_OK:
         try:
@@ -304,7 +301,6 @@ def _quick_sentiment(text: str, lang: str) -> str:
         except Exception:
             pass
 
-    # VADER — uses pre-loaded _VADER instance, not a new one
     vader_vote = None
     if VADER_OK:
         try:
@@ -323,7 +319,7 @@ def _quick_sentiment(text: str, lang: str) -> str:
 
 def _make_row(scheme: str, source: str, lang: str,
               comment: str, sentiment: str = None) -> dict:
-    """Build a data row — always labels, never saves 'Unknown'."""
+    """Build a data row — always labelled, never saved as Unknown."""
     text = comment.strip()
     if not sentiment or sentiment == "Unknown":
         sentiment = _quick_sentiment(text, lang)
@@ -358,9 +354,9 @@ def _save_rows(rows: list) -> int:
     for r in rows:
         text = r.get("Comment", "").strip()
         norm = _normalise(text)
-        if len(text) < 15:         continue
-        if norm in seen_in_batch:  continue
-        if norm in existing_norm:  continue
+        if len(text) < 15:        continue
+        if norm in seen_in_batch: continue
+        if norm in existing_norm: continue
         seen_in_batch.add(norm)
         existing_norm.add(norm)
         deduped_batch.append(r)
@@ -377,92 +373,8 @@ def _save_rows(rows: list) -> int:
     return len(deduped_batch)
 
 
-def _extract_shortcode(url):
-    for p in [r"instagram\.com/reel/([A-Za-z0-9_-]+)",
-              r"instagram\.com/p/([A-Za-z0-9_-]+)",
-              r"instagram\.com/tv/([A-Za-z0-9_-]+)"]:
-        m = re.search(p, url)
-        if m: return m.group(1)
-    return None
-
-
 # ═════════════════════════════════════════════════════════════════════════════
-#  INSTAGRAM FETCHER
-# ═════════════════════════════════════════════════════════════════════════════
-def fetch_instagram_post(url, scheme, max_comments=500, cb=None):
-    if not INSTAGRAM_USERNAME or not INSTAGRAM_PASSWORD:
-        if cb: cb("Instagram: Add INSTAGRAM_USERNAME and INSTAGRAM_PASSWORD to .env")
-        return []
-    try:
-        import instaloader
-    except ImportError:
-        if cb: cb("Instagram: Run → pip install instaloader")
-        return []
-
-    shortcode = _extract_shortcode(url)
-    if not shortcode:
-        if cb: cb(f"Instagram: Could not extract shortcode from URL: {url}")
-        return []
-
-    if cb: cb(f"Instagram: Loading post {shortcode}...")
-    try:
-        L = instaloader.Instaloader(
-            download_pictures=False, download_videos=False,
-            download_video_thumbnails=False, download_geotags=False,
-            download_comments=True, save_metadata=False,
-            compress_json=False, quiet=True,
-            request_timeout=10, max_connection_attempts=3,
-        )
-        L.context.sleep = True
-        L.context.max_connection_attempts = 3
-        try:
-            L.login(INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD)
-            if cb: cb("Instagram: Logged in successfully")
-        except Exception as e:
-            if cb: cb(f"Instagram: Login failed — {e}")
-            return []
-
-        post  = instaloader.Post.from_shortcode(L.context, shortcode)
-        if cb: cb("Instagram: Post found — fetching comments...")
-        rows  = []
-        count = 0
-        for comment in post.get_comments():
-            text = comment.text.strip()
-            if len(text) < 15: continue
-            lang = _detect_lang(text)
-            rows.append(_make_row(scheme, "Instagram", lang, text))
-            count += 1
-            if hasattr(comment, "answers"):
-                for reply in comment.answers:
-                    rt = reply.text.strip()
-                    if len(rt) >= 15:
-                        rows.append(_make_row(scheme, "Instagram", _detect_lang(rt), rt))
-                        count += 1
-            if count >= max_comments: break
-            if count % 50 == 0 and cb:
-                cb(f"Instagram: {count} comments fetched so far...")
-            time.sleep(0.3)
-
-        saved = _save_rows(rows)
-        if cb: cb(f"Instagram: {len(rows)} fetched, {saved} new unique saved")
-        return rows
-    except Exception as e:
-        if cb: cb(f"Instagram: Error — {e}")
-        return []
-
-
-def fetch_instagram_multiple(urls_with_schemes, max_per_post=300, cb=None):
-    all_rows = []
-    for url, scheme in urls_with_schemes:
-        if cb: cb(f"Instagram: Fetching {url[:50]}...")
-        rows = fetch_instagram_post(url, scheme, max_per_post, cb)
-        all_rows.extend(rows)
-        time.sleep(2)
-    return all_rows
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-#  YOUTUBE FETCHER
+#  YOUTUBE FETCHER  — Official API, real-time, unchanged
 # ═════════════════════════════════════════════════════════════════════════════
 def fetch_youtube(scheme, limit=300, cb=None):
     if not YOUTUBE_API_KEY:
@@ -509,7 +421,7 @@ def fetch_youtube(scheme, limit=300, cb=None):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  NEWS API FETCHER
+#  NEWS API FETCHER  — Official API, real-time, unchanged
 # ═════════════════════════════════════════════════════════════════════════════
 def fetch_news(scheme, limit=200, cb=None):
     if not NEWS_API_KEY:
@@ -549,62 +461,248 @@ def fetch_news(scheme, limit=200, cb=None):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  TWITTER FETCHER
+#  GOOGLE NEWS RSS FETCHER
+#  ✅ No API key needed
+#  ✅ Real-time — updates every few hours
+#  ✅ Official RSS feed from Google — not scraping
+#  ✅ English headlines and descriptions about Indian govt schemes
 # ═════════════════════════════════════════════════════════════════════════════
-def fetch_twitter(scheme, limit=100, cb=None):
-    if not TWITTER_BEARER_TOKEN:
-        if cb: cb("Twitter: No Bearer Token — skipping")
-        return []
+def fetch_google_news_rss(scheme: str, limit: int = 200, cb=None) -> list:
+    """
+    Fetches Google News RSS feed for Indian government schemes.
+
+    How it works:
+      Google provides an official RSS feed at news.google.com/rss
+      RSS is a machine-readable format designed to be read by code
+      No scraping — Google publishes this data intentionally
+      Updates in real-time as news is published
+
+    No API key required.
+    """
     try:
-        import tweepy
-        client = tweepy.Client(bearer_token=TWITTER_BEARER_TOKEN, wait_on_rate_limit=True)
+        import requests
+        from bs4 import BeautifulSoup
     except ImportError:
-        if cb: cb("Twitter: Run → pip install tweepy")
+        if cb: cb("Google News RSS: Run → pip install requests beautifulsoup4 lxml")
         return []
 
-    rows = []
-    seen = set()
-    for kw in SCHEME_KEYWORDS.get(scheme, [scheme])[:1]:
-        if len(rows) >= limit: break
+    rows    = []
+    seen    = set()
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; RSSReader/1.0)"}
+
+    search_terms = SCHEME_KEYWORDS.get(scheme, [scheme])[:3]
+
+    for term in search_terms:
+        if len(rows) >= limit:
+            break
         try:
-            for lang in ["en", "hi"]:
-                if len(rows) >= limit: break
-                resp = client.search_recent_tweets(
-                    query=f"{kw} lang:{lang} -is:retweet",
-                    max_results=min(100, limit - len(rows)),
-                    tweet_fields=["text"],
-                )
-                if resp.data:
-                    for tw in resp.data:
-                        text = tw.text.strip()
-                        norm = _normalise(text)
-                        if len(text) >= 15 and norm not in seen:
-                            seen.add(norm)
-                            rows.append(_make_row(scheme, "Twitter", lang, text))
-            time.sleep(1)
+            # Google News RSS — India edition, English
+            query   = urllib.parse.quote(f"{term} India government scheme")
+            rss_url = (f"https://news.google.com/rss/search"
+                       f"?q={query}&hl=en-IN&gl=IN&ceid=IN:en")
+
+            resp = requests.get(rss_url, headers=headers, timeout=10)
+            if resp.status_code != 200:
+                if cb: cb(f"Google News RSS: HTTP {resp.status_code} for {term}")
+                continue
+
+            # Parse RSS XML
+            soup = BeautifulSoup(resp.content, "xml")
+
+            for item in soup.find_all("item"):
+                if len(rows) >= limit:
+                    break
+
+                # Extract title
+                title_tag = item.find("title")
+                if title_tag:
+                    text = title_tag.get_text(strip=True)
+                    # Remove source suffix " - Source Name"
+                    if " - " in text:
+                        text = text.rsplit(" - ", 1)[0].strip()
+                    norm = _normalise(text)
+                    if len(text) >= 20 and norm not in seen:
+                        seen.add(norm)
+                        rows.append(_make_row(scheme, "Google News", "en", text))
+
+                # Extract description
+                desc_tag = item.find("description")
+                if desc_tag and len(rows) < limit:
+                    # Description is often HTML — extract plain text
+                    desc_soup = BeautifulSoup(desc_tag.get_text(), "html.parser")
+                    text = desc_soup.get_text(strip=True)
+                    if " - " in text:
+                        text = text.rsplit(" - ", 1)[0].strip()
+                    norm = _normalise(text)
+                    if len(text) >= 20 and norm not in seen:
+                        seen.add(norm)
+                        rows.append(_make_row(scheme, "Google News", "en", text[:400]))
+
+            time.sleep(0.5)  # polite delay between requests
+
         except Exception as e:
-            if cb: cb(f"Twitter error: {e}")
-    if cb: cb(f"Twitter: {len(rows)} unique tweets fetched")
+            if cb: cb(f"Google News RSS error for '{term}': {e}")
+            continue
+
+    if cb: cb(f"Google News RSS: {len(rows)} items fetched for {scheme}")
+    return rows
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  HINDI NEWS RSS FETCHER
+#  ✅ No API key needed
+#  ✅ Real-time — RSS feeds update every few hours
+#  ✅ Official RSS feeds — Dainik Bhaskar, Amar Ujala, Navbharat Times
+#  ✅ Best source for Hindi content about Indian government schemes
+# ═════════════════════════════════════════════════════════════════════════════
+
+# Hindi news RSS feeds — all official, no API key needed
+_HINDI_RSS_FEEDS = [
+    # Dainik Bhaskar — India's largest Hindi newspaper
+    ("https://www.bhaskar.com/rss-feed/1061/",           "Dainik Bhaskar"),
+    # Amar Ujala — Major Hindi newspaper
+    ("https://www.amarujala.com/rss/india-news.xml",      "Amar Ujala"),
+    # Navbharat Times — Hindi edition of Times of India
+    ("https://navbharattimes.indiatimes.com/rssfeeds/1564454837.cms", "Navbharat Times"),
+    # Jagran — Major Hindi newspaper
+    ("https://www.jagran.com/rss/news-national.xml",      "Jagran"),
+]
+
+
+def fetch_hindi_news_rss(scheme: str, limit: int = 150, cb=None) -> list:
+    """
+    Fetches Hindi news from official RSS feeds of major Hindi newspapers.
+
+    How it works:
+      RSS feeds are official, machine-readable XML files published by newspapers
+      They update automatically as new articles are published
+      We filter articles related to the scheme using keyword matching
+
+    Sources: Dainik Bhaskar, Amar Ujala, Navbharat Times, Jagran
+    No API key required.
+    """
+    try:
+        import requests
+        from bs4 import BeautifulSoup
+    except ImportError:
+        if cb: cb("Hindi News RSS: Run → pip install requests beautifulsoup4 lxml")
+        return []
+
+    rows    = []
+    seen    = set()
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; RSSReader/1.0)"}
+
+    # Build keyword list for filtering — scheme name + related Hindi terms
+    search_terms = SCHEME_KEYWORDS.get(scheme, [scheme])
+    # Extract short keywords for matching (first word of each term)
+    keywords = set()
+    for term in search_terms[:3]:
+        for word in term.lower().split():
+            if len(word) > 3:
+                keywords.add(word)
+
+    # Also add scheme short name (e.g. "PMAY", "PM Kisan", "Ayushman")
+    scheme_short = scheme.split("—")[0].strip().lower()
+    for word in scheme_short.split():
+        if len(word) > 2:
+            keywords.add(word)
+
+    for rss_url, source_name in _HINDI_RSS_FEEDS:
+        if len(rows) >= limit:
+            break
+        try:
+            resp = requests.get(rss_url, headers=headers, timeout=10)
+            if resp.status_code != 200:
+                if cb: cb(f"Hindi RSS: HTTP {resp.status_code} from {source_name}")
+                continue
+
+            soup = BeautifulSoup(resp.content, "xml")
+
+            for item in soup.find_all("item"):
+                if len(rows) >= limit:
+                    break
+
+                # Get title and description
+                title_tag = item.find("title")
+                desc_tag  = item.find("description")
+
+                title_text = title_tag.get_text(strip=True) if title_tag else ""
+                desc_text  = desc_tag.get_text(strip=True)  if desc_tag  else ""
+
+                # Combine for keyword matching
+                combined = (title_text + " " + desc_text).lower()
+
+                # Only include if related to the scheme
+                # Check if any keyword appears in the article
+                if not any(kw in combined for kw in keywords):
+                    continue
+
+                # Process title
+                if title_text:
+                    norm = _normalise(title_text)
+                    if len(title_text) >= 20 and norm not in seen:
+                        seen.add(norm)
+                        lang = _detect_lang(title_text)
+                        rows.append(_make_row(scheme, source_name, lang, title_text))
+
+                # Process description
+                if desc_text and len(rows) < limit:
+                    # Strip HTML tags from description
+                    desc_clean = BeautifulSoup(desc_text, "html.parser").get_text(strip=True)
+                    norm = _normalise(desc_clean)
+                    if (len(desc_clean) >= 20
+                            and len(desc_clean) <= 500
+                            and norm not in seen):
+                        seen.add(norm)
+                        lang = _detect_lang(desc_clean)
+                        rows.append(_make_row(scheme, source_name, lang,
+                                              desc_clean[:400]))
+
+            time.sleep(0.5)
+
+        except Exception as e:
+            if cb: cb(f"Hindi RSS error from {source_name}: {e}")
+            continue
+
+    if cb: cb(f"Hindi News RSS: {len(rows)} items fetched for {scheme}")
     return rows
 
 
 # ═════════════════════════════════════════════════════════════════════════════
 #  FETCH ALL — main entry point
+#  Now uses 4 sources: YouTube + NewsAPI + Google News RSS + Hindi News RSS
 # ═════════════════════════════════════════════════════════════════════════════
 def fetch_all(scheme="All", max_per_source=200, progress_callback=None):
     cb      = progress_callback
     schemes = ALL_SCHEMES if scheme == "All" else [scheme]
-    totals  = {"YouTube": 0, "News App": 0, "Twitter": 0, "Instagram": 0}
+    totals  = {
+        "YouTube":     0,
+        "News App":    0,
+        "Google News": 0,
+        "Hindi News":  0,
+    }
+
     for s in schemes:
         if cb: cb(f"━━ Fetching: {s} ━━")
-        yt   = fetch_youtube(s,  max_per_source,           cb)
-        news = fetch_news(s,     max_per_source,           cb)
-        twt  = fetch_twitter(s,  min(100, max_per_source), cb)
-        saved = _save_rows(yt + news + twt)
-        totals["YouTube"]  += len(yt)
-        totals["News App"] += len(news)
-        totals["Twitter"]  += len(twt)
+
+        # Official API sources
+        yt   = fetch_youtube(s, max_per_source, cb)
+        news = fetch_news(s,   max_per_source, cb)
+
+        # Free RSS sources — no API key needed
+        gnews = fetch_google_news_rss(s, max_per_source, cb)
+        hindi = fetch_hindi_news_rss(s,  min(150, max_per_source), cb)
+
+        all_rows = yt + news + gnews + hindi
+        saved    = _save_rows(all_rows)
+
+        totals["YouTube"]     += len(yt)
+        totals["News App"]    += len(news)
+        totals["Google News"] += len(gnews)
+        totals["Hindi News"]  += len(hindi)
+
         if cb: cb(f"✓ {saved} new unique rows saved for {s}")
+
     return totals
 
 
@@ -614,68 +712,45 @@ def fetch_all(scheme="All", max_per_source=200, progress_callback=None):
 if __name__ == "__main__":
     print("\n" + "="*60)
     print("  Pulse Sentiment AI — Live Data Fetcher")
-    print("  All Modi Government Schemes (2014 → Present)")
+    print("  Sources: YouTube + NewsAPI + Google News RSS + Hindi News RSS")
     print("="*60)
 
-    print("\nFetch mode:")
-    print("  1. Fetch by scheme (YouTube + News + Twitter)")
-    print("  2. Fetch Instagram post/reel by URL")
-    print("  3. Both")
-    mode = input("\nEnter 1 / 2 / 3: ").strip()
+    print("\nWhich scheme?")
+    for i, s in enumerate(ALL_SCHEMES, 1):
+        print(f"  {i:>2}. {s}")
+    print(f"  {len(ALL_SCHEMES)+1:>2}. All schemes")
 
-    if mode in ("1", "3"):
-        print("\nWhich scheme?")
-        for i, s in enumerate(ALL_SCHEMES, 1):
-            print(f"  {i:>2}. {s}")
-        print(f"  {len(ALL_SCHEMES)+1:>2}. All schemes")
-        c = input("\nEnter number: ").strip()
-        scheme = "All"
-        if c.isdigit() and 1 <= int(c) <= len(ALL_SCHEMES):
-            scheme = ALL_SCHEMES[int(c)-1]
-        mx = input("Max per source? (default 200): ").strip()
-        mx = int(mx) if mx.isdigit() else 200
-        print(f"\nFetching '{scheme}'...\n")
-        counts = fetch_all(scheme, mx, lambda m: print(f"  {m}"))
-        print("\n" + "="*60)
-        print("  RESULTS")
-        print("="*60)
-        for src, cnt in counts.items():
-            bar = "█" * min(cnt // 5, 40)
-            print(f"  {src:<22} {cnt:>5}  {bar}")
-        print(f"\n  Total fetched : {sum(counts.values())} items")
-        if DATA_CSV.exists():
-            df = pd.read_csv(DATA_CSV)
-            dupe_rate = round((1 - df["Comment"].nunique() / len(df)) * 100, 1)
-            print(f"  CSV total rows  : {len(df)}")
-            print(f"  Unique comments : {df['Comment'].nunique()}")
-            print(f"  Duplicate rate  : {dupe_rate}%  "
-                  f"({'✓ healthy' if dupe_rate < 3 else '⚠ check data'})")
-            print(f"\n  Sentiment breakdown:")
-            for s, c in df["Sentiment"].value_counts().items():
-                pct = round(c / len(df) * 100, 1)
-                print(f"    {s:<12} {c:>5}  ({pct}%)")
+    c = input("\nEnter number: ").strip()
+    scheme = "All"
+    if c.isdigit() and 1 <= int(c) <= len(ALL_SCHEMES):
+        scheme = ALL_SCHEMES[int(c)-1]
 
-    if mode in ("2", "3"):
-        print("\n── Instagram URL Fetcher ──")
-        url = input("Paste Instagram reel/post URL: ").strip()
-        print("\nWhich scheme does this post belong to?")
-        for i, s in enumerate(ALL_SCHEMES, 1):
-            print(f"  {i:>2}. {s}")
-        c = input("\nEnter number: ").strip()
-        scheme = (ALL_SCHEMES[int(c)-1]
-                  if c.isdigit() and 1 <= int(c) <= len(ALL_SCHEMES)
-                  else "General")
-        mx = input("Max comments to fetch? (default 300): ").strip()
-        mx = int(mx) if mx.isdigit() else 300
-        print(f"\nFetching comments from {url[:60]}...\n")
-        rows  = fetch_instagram_post(url, scheme, mx, lambda m: print(f"  {m}"))
-        saved = _save_rows(rows)
-        print(f"\n  Fetched : {len(rows)} comments")
-        print(f"  Saved   : {saved} new unique rows")
+    mx = input("Max per source? (default 200): ").strip()
+    mx = int(mx) if mx.isdigit() else 200
+
+    print(f"\nFetching '{scheme}'...\n")
+    counts = fetch_all(scheme, mx, lambda m: print(f"  {m}"))
+
+    print("\n" + "="*60)
+    print("  RESULTS")
+    print("="*60)
+    for src, cnt in counts.items():
+        bar = "█" * min(cnt // 5, 40)
+        print(f"  {src:<22} {cnt:>5}  {bar}")
+    print(f"\n  Total fetched : {sum(counts.values())} items")
 
     if DATA_CSV.exists():
-        df = pd.read_csv(DATA_CSV)
-        print(f"\n  data.csv total rows : {len(df)}")
-        print(f"  Sources  : {df['Source'].value_counts().to_dict()}")
-        print(f"  Schemes  : {df['Scheme'].nunique()} unique schemes")
+        df        = pd.read_csv(DATA_CSV)
+        dupe_rate = round((1 - df["Comment"].nunique() / len(df)) * 100, 1)
+        print(f"  CSV total rows  : {len(df)}")
+        print(f"  Unique comments : {df['Comment'].nunique()}")
+        print(f"  Duplicate rate  : {dupe_rate}%  "
+              f"({'✓ healthy' if dupe_rate < 3 else '⚠ check data'})")
+        print(f"\n  Sentiment breakdown:")
+        for s, c in df["Sentiment"].value_counts().items():
+            pct = round(c / len(df) * 100, 1)
+            print(f"    {s:<12} {c:>5}  ({pct}%)")
+        print(f"\n  Source breakdown:")
+        for s, c in df["Source"].value_counts().items():
+            print(f"    {s:<22} {c:>5}")
     print("="*60 + "\n")
