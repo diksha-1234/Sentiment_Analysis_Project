@@ -473,10 +473,11 @@ if not st.session_state.logged_in:
                      Sign in to access your dashboard</div>
             </div>""", unsafe_allow_html=True)
 
-            uname = st.text_input("Username", placeholder="Enter username", key="li_user", label_visibility="collapsed")
             st.markdown('<div style="font-family:IBM Plex Mono,monospace;font-size:9px;letter-spacing:2.5px;text-transform:uppercase;color:#4a6380;margin-bottom:4px;">USERNAME</div>', unsafe_allow_html=True)
+            uname = st.text_input("Username", placeholder="Enter username", key="li_user", label_visibility="collapsed")
+
+            st.markdown('<div style="font-family:IBM Plex Mono,monospace;font-size:9px;letter-spacing:2.5px;text-transform:uppercase;color:#4a6380;margin-bottom:4px;margin-top:12px;">PASSWORD</div>', unsafe_allow_html=True)
             passw = st.text_input("Password", type="password", placeholder="Enter password", key="li_pass", label_visibility="collapsed")
-            st.markdown('<div style="font-family:IBM Plex Mono,monospace;font-size:9px;letter-spacing:2.5px;text-transform:uppercase;color:#4a6380;margin-bottom:18px;">PASSWORD</div>', unsafe_allow_html=True)
 
             c1, c2 = st.columns(2)
             with c1:
