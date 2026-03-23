@@ -1,51 +1,23 @@
 """
-auth/auth_manager.py
-────────────────────
-Handles:
-  • Local signup / login with bcrypt-hashed passwords
-  • Google OAuth
-  • Supabase persistence for deployment (users survive restarts)
-  • Falls back to local users.json for local development
+auth/auth_manager.py — Pulse Sentiment AI
+==========================================
+Handles login, signup, and Google OAuth.
+Works with both local (users.json) and Supabase (deployed).
 
-DEPLOYMENT:  users stored in Supabase `users` table  → survive forever
-LOCAL DEV:   users stored in auth/users.json          → local only
-
-Supabase table required (run once in Supabase SQL editor):
-
-    CREATE TABLE users (
-        username   TEXT PRIMARY KEY,
-        name       TEXT,
-        email      TEXT,
-        password   TEXT,
-        role       TEXT DEFAULT 'user',
-        joined     TEXT,
-        avatar     TEXT DEFAULT '👤'
-    );
-
-    INSERT INTO users (username, name, email, password, role, joined, avatar)
-    VALUES ('admin', 'Admin User', 'admin@pulse.ai', '', 'admin', '2024-01-01', '🛡️')
-    ON CONFLICT (username) DO NOTHING;
+DEMO ACCOUNT: admin / 1234  — auto-created if not found
 """
 
-import json
 import os
+import json
 import hashlib
 from pathlib import Path
 from datetime import datetime
 
-# ── Optional bcrypt ──────────────────────────────────────────────────────────
-try:
-    import bcrypt
-    BCRYPT_OK = True
-except ImportError:
-    BCRYPT_OK = False
-
-USERS_FILE = Path(__file__).parent / "users.json"
+# ── Path for local dev fallback ───────────────────────────────────────────────
+USERS_JSON = Path("auth/users.json")
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-#  HELPERS
-# ═════════════════════════════════════════════════════════════════════════════
+# ── Secret loader ─────────────────────────────────────────────────────────────
 def _get_secret(key: str) -> str:
     try:
         import streamlit as st
@@ -55,212 +27,218 @@ def _get_secret(key: str) -> str:
 
 
 def _is_deployed() -> bool:
-    """True when Supabase credentials are present (Streamlit Cloud)."""
     return bool(_get_secret("SUPABASE_URL") and _get_secret("SUPABASE_KEY"))
 
 
 def _get_supabase():
     from supabase import create_client
-    return create_client(_get_secret("SUPABASE_URL"), _get_secret("SUPABASE_KEY"))
+    url = _get_secret("SUPABASE_URL")
+    key = _get_secret("SUPABASE_KEY")
+    return create_client(url, key)
 
 
-def _hash_pw(pw: str) -> str:
-    if BCRYPT_OK:
-        return bcrypt.hashpw(pw.encode(), bcrypt.gensalt()).decode()
-    return hashlib.sha256(pw.encode()).hexdigest()
+# ── Password hashing (simple sha256 — no bcrypt dependency needed) ────────────
+def _hash_password(password: str) -> str:
+    return hashlib.sha256(password.encode()).hexdigest()
 
 
-def _verify_pw(pw: str, hashed: str) -> bool:
-    if BCRYPT_OK:
+def _check_password(plain: str, stored: str) -> bool:
+    # Support both sha256 hashed and legacy plain text (for migration)
+    if stored == plain:
+        return True
+    if stored == _hash_password(plain):
+        return True
+    # Try bcrypt if installed (for compatibility with existing data)
+    try:
+        import bcrypt
+        if stored.startswith("$2b$") or stored.startswith("$2a$"):
+            return bcrypt.checkpw(plain.encode(), stored.encode())
+    except ImportError:
+        pass
+    return False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  LOCAL USER STORE (used when Supabase is not configured)
+# ─────────────────────────────────────────────────────────────────────────────
+def _load_local_users() -> dict:
+    if USERS_JSON.exists():
         try:
-            return bcrypt.checkpw(pw.encode(), hashed.encode())
+            with open(USERS_JSON, "r") as f:
+                return json.load(f)
         except Exception:
             pass
-    return hashlib.sha256(pw.encode()).hexdigest() == hashed
+    # Return default admin if file doesn't exist
+    return {
+        "admin": {
+            "name":     "Admin",
+            "email":    "admin@pulse.ai",
+            "password": _hash_password("1234"),
+            "role":     "admin",
+            "joined":   "2025-01-01",
+            "avatar":   "🔑",
+        }
+    }
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+def _save_local_users(users: dict) -> None:
+    USERS_JSON.parent.mkdir(exist_ok=True)
+    with open(USERS_JSON, "w") as f:
+        json.dump(users, f, indent=2)
+
+
+def _ensure_local_admin() -> None:
+    """Make sure admin/1234 always exists in local store."""
+    users = _load_local_users()
+    if "admin" not in users:
+        users["admin"] = {
+            "name":     "Admin",
+            "email":    "admin@pulse.ai",
+            "password": _hash_password("1234"),
+            "role":     "admin",
+            "joined":   "2025-01-01",
+            "avatar":   "🔑",
+        }
+        _save_local_users(users)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  SUPABASE USER STORE
-# ═════════════════════════════════════════════════════════════════════════════
-def _supabase_get_user(username: str) -> dict | None:
-    """Fetch one user row from Supabase. Returns dict or None."""
+# ─────────────────────────────────────────────────────────────────────────────
+def _ensure_supabase_admin() -> None:
+    """Auto-creates admin/1234 in Supabase if it doesn't exist."""
+    try:
+        client = _get_supabase()
+        res = client.table("users").select("username").eq("username", "admin").execute()
+        if not res.data:
+            client.table("users").insert({
+                "username": "admin",
+                "name":     "Admin",
+                "email":    "admin@pulse.ai",
+                "password": _hash_password("1234"),
+                "role":     "admin",
+                "joined":   "2025-01-01",
+                "avatar":   "🔑",
+            }).execute()
+            print("[Auth] Admin user auto-created in Supabase")
+    except Exception as e:
+        print(f"[Auth] Could not ensure admin in Supabase: {e}")
+
+
+def _get_supabase_user(username: str) -> dict | None:
     try:
         client = _get_supabase()
         res = client.table("users").select("*").eq("username", username).execute()
         if res.data:
             return res.data[0]
-        return None
     except Exception as e:
-        print(f"[Auth] Supabase get_user error: {e}")
-        return None
+        print(f"[Auth] Supabase user lookup failed: {e}")
+    return None
 
 
-def _supabase_create_user(user: dict) -> bool:
-    """Insert a new user row into Supabase. Returns True on success."""
+def _save_supabase_user(user_data: dict) -> bool:
     try:
         client = _get_supabase()
-        client.table("users").insert(user).execute()
+        client.table("users").insert(user_data).execute()
         return True
     except Exception as e:
-        print(f"[Auth] Supabase create_user error: {e}")
+        print(f"[Auth] Supabase user save failed: {e}")
         return False
 
 
-def _supabase_ensure_admin():
-    """
-    Make sure the admin account exists in Supabase.
-    Called once on first login attempt so admin is always available.
-    """
-    try:
-        existing = _supabase_get_user("admin")
-        if existing is None:
-            client = _get_supabase()
-            client.table("users").insert({
-                "username": "admin",
-                "name":     "Admin User",
-                "email":    "admin@pulse.ai",
-                "password": _hash_pw("1234"),
-                "role":     "admin",
-                "joined":   "2024-01-01",
-                "avatar":   "🛡️",
-            }).execute()
-            print("[Auth] Admin account created in Supabase.")
-        elif not existing.get("password"):
-            # Password column was empty (from SQL seed) — set it now
-            client = _get_supabase()
-            client.table("users").update(
-                {"password": _hash_pw("1234")}
-            ).eq("username", "admin").execute()
-            print("[Auth] Admin password set in Supabase.")
-    except Exception as e:
-        print(f"[Auth] ensure_admin error: {e}")
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-#  LOCAL JSON USER STORE  (used when not deployed)
-# ═════════════════════════════════════════════════════════════════════════════
-def _default_users() -> dict:
-    return {
-        "admin": {
-            "name":     "Admin User",
-            "email":    "admin@pulse.ai",
-            "password": _hash_pw("1234"),
-            "role":     "admin",
-            "joined":   "2024-01-01",
-            "avatar":   "🛡️",
-        }
-    }
-
-
-def _load_users_local() -> dict:
-    if not USERS_FILE.exists():
-        defaults = _default_users()
-        _save_users_local(defaults)
-        return defaults
-    try:
-        with open(USERS_FILE, "r") as f:
-            data = json.load(f)
-        if "admin" not in data:
-            data["admin"] = _default_users()["admin"]
-            _save_users_local(data)
-        return data
-    except Exception:
-        return _default_users()
-
-
-def _save_users_local(users: dict):
-    USERS_FILE.parent.mkdir(exist_ok=True)
-    with open(USERS_FILE, "w") as f:
-        json.dump(users, f, indent=2)
-
-
-# ═════════════════════════════════════════════════════════════════════════════
+# ─────────────────────────────────────────────────────────────────────────────
 #  PUBLIC API
-# ═════════════════════════════════════════════════════════════════════════════
+# ─────────────────────────────────────────────────────────────────────────────
 def login(username: str, password: str) -> tuple[bool, str, dict]:
     """
-    Returns (success, message, user_info_dict).
-    Routes to Supabase (deployed) or local JSON (dev).
+    Returns (success, message, user_info_dict)
+    user_info_dict has: name, email, role, avatar
     """
-    un = username.strip().lower()
+    username = username.strip().lower()
 
     if _is_deployed():
-        # ── Supabase path ─────────────────────────────────────────────────────
-        _supabase_ensure_admin()   # make sure admin always exists
-        user = _supabase_get_user(un)
-        if user is None:
+        _ensure_supabase_admin()
+        user = _get_supabase_user(username)
+        if not user:
             return False, "User not found.", {}
-        if not _verify_pw(password, user.get("password", "")):
+        if not _check_password(password, user.get("password", "")):
             return False, "Incorrect password.", {}
-        return True, "Login successful!", {
-            "name":   user.get("name", un),
+        return True, "OK", {
+            "name":   user.get("name", username),
             "email":  user.get("email", ""),
             "role":   user.get("role", "user"),
             "avatar": user.get("avatar", "👤"),
         }
 
     else:
-        # ── Local JSON path ───────────────────────────────────────────────────
-        users = _load_users_local()
-        if un not in users:
+        _ensure_local_admin()
+        users = _load_local_users()
+        if username not in users:
             return False, "User not found.", {}
-        user = users[un]
-        if not _verify_pw(password, user["password"]):
+        user = users[username]
+        if not _check_password(password, user.get("password", "")):
             return False, "Incorrect password.", {}
-        return True, "Login successful!", user
+        return True, "OK", {
+            "name":   user.get("name", username),
+            "email":  user.get("email", ""),
+            "role":   user.get("role", "user"),
+            "avatar": user.get("avatar", "👤"),
+        }
 
 
-def signup(username: str, password: str, name: str, email: str) -> tuple[bool, str]:
+def signup(username: str, password: str, name: str, email: str = "") -> tuple[bool, str]:
     """
-    Returns (success, message).
-    Routes to Supabase (deployed) or local JSON (dev).
+    Returns (success, message)
     """
-    un = username.strip().lower()
+    username = username.strip().lower()
 
-    if len(un) < 3:
+    if len(username) < 3:
         return False, "Username must be at least 3 characters."
     if len(password) < 4:
         return False, "Password must be at least 4 characters."
+    if not name.strip():
+        return False, "Name is required."
+
+    hashed = _hash_password(password)
+    now    = datetime.now().strftime("%Y-%m-%d")
 
     if _is_deployed():
-        # ── Supabase path ─────────────────────────────────────────────────────
-        existing = _supabase_get_user(un)
-        if existing is not None:
-            return False, "Username already exists. Please choose another."
-        ok = _supabase_create_user({
-            "username": un,
+        existing = _get_supabase_user(username)
+        if existing:
+            return False, "Username already taken."
+        ok = _save_supabase_user({
+            "username": username,
             "name":     name.strip(),
             "email":    email.strip(),
-            "password": _hash_pw(password),
+            "password": hashed,
             "role":     "user",
-            "joined":   datetime.now().strftime("%Y-%m-%d"),
+            "joined":   now,
             "avatar":   "👤",
         })
         if ok:
-            return True, "Account created successfully! You can now log in."
-        else:
-            return False, "Could not create account. Please try again."
+            return True, "Account created successfully."
+        return False, "Could not create account. Please try again."
 
     else:
-        # ── Local JSON path ───────────────────────────────────────────────────
-        users = _load_users_local()
-        if un in users:
-            return False, "Username already exists. Please choose another."
-        users[un] = {
+        _ensure_local_admin()
+        users = _load_local_users()
+        if username in users:
+            return False, "Username already taken."
+        users[username] = {
             "name":     name.strip(),
             "email":    email.strip(),
-            "password": _hash_pw(password),
+            "password": hashed,
             "role":     "user",
-            "joined":   datetime.now().strftime("%Y-%m-%d"),
+            "joined":   now,
             "avatar":   "👤",
         }
-        _save_users_local(users)
-        return True, "Account created successfully! You can now log in."
+        _save_local_users(users)
+        return True, "Account created successfully."
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-#  GOOGLE OAUTH  (unchanged)
-# ═════════════════════════════════════════════════════════════════════════════
+# ─────────────────────────────────────────────────────────────────────────────
+#  GOOGLE OAUTH
+# ─────────────────────────────────────────────────────────────────────────────
 def get_google_auth_url(client_id: str, redirect_uri: str) -> str:
     import urllib.parse
     params = {
@@ -271,53 +249,36 @@ def get_google_auth_url(client_id: str, redirect_uri: str) -> str:
         "access_type":   "offline",
         "prompt":        "select_account",
     }
-    return "https://accounts.google.com/o/oauth2/v2/auth?" + urllib.parse.urlencode(params)
+    base = "https://accounts.google.com/o/oauth2/v2/auth"
+    return f"{base}?{urllib.parse.urlencode(params)}"
 
 
-def exchange_google_code(code: str, client_id: str, client_secret: str,
-                         redirect_uri: str) -> dict:
-    import urllib.request
-    import urllib.parse
-
-    data = urllib.parse.urlencode({
-        "code":          code,
-        "client_id":     client_id,
-        "client_secret": client_secret,
-        "redirect_uri":  redirect_uri,
-        "grant_type":    "authorization_code",
-    }).encode()
-
+def exchange_google_code(code: str, client_id: str,
+                         client_secret: str, redirect_uri: str) -> dict | None:
     try:
-        req = urllib.request.Request("https://oauth2.googleapis.com/token", data=data)
-        with urllib.request.urlopen(req) as resp:
-            tokens = json.loads(resp.read())
+        import requests
+        token_res = requests.post(
+            "https://oauth2.googleapis.com/token",
+            data={
+                "code":          code,
+                "client_id":     client_id,
+                "client_secret": client_secret,
+                "redirect_uri":  redirect_uri,
+                "grant_type":    "authorization_code",
+            },
+            timeout=10,
+        )
+        token_data = token_res.json()
+        access_token = token_data.get("access_token")
+        if not access_token:
+            return None
 
-        id_token    = tokens.get("id_token", "")
-        import base64
-        payload_b64 = id_token.split(".")[1]
-        payload_b64 += "=" * (4 - len(payload_b64) % 4)
-        payload     = json.loads(base64.urlsafe_b64decode(payload_b64))
-
-        # Auto-register Google users in Supabase so they persist
-        google_un = payload.get("email", "").split("@")[0].lower()
-        if google_un and _is_deployed():
-            existing = _supabase_get_user(google_un)
-            if existing is None:
-                _supabase_create_user({
-                    "username": google_un,
-                    "name":     payload.get("name", "Google User"),
-                    "email":    payload.get("email", ""),
-                    "password": "",   # Google users have no password
-                    "role":     "user",
-                    "joined":   datetime.now().strftime("%Y-%m-%d"),
-                    "avatar":   "🌐",
-                })
-
-        return {
-            "name":   payload.get("name", "Google User"),
-            "email":  payload.get("email", ""),
-            "avatar": "🌐",
-            "sub":    payload.get("sub", ""),
-        }
-    except Exception:
-        return {}
+        info_res = requests.get(
+            "https://www.googleapis.com/oauth2/v2/userinfo",
+            headers={"Authorization": f"Bearer {access_token}"},
+            timeout=10,
+        )
+        return info_res.json()
+    except Exception as e:
+        print(f"[Auth] Google OAuth exchange failed: {e}")
+        return None
