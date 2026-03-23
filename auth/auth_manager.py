@@ -323,15 +323,18 @@ def signup(username: str, password: str, name: str, email: str = "") -> tuple[bo
 # ─────────────────────────────────────────────────────────────────────────────
 #  PUBLIC API — GOOGLE OAUTH
 # ─────────────────────────────────────────────────────────────────────────────
-def get_google_auth_url() -> str:
+def get_google_auth_url(client_id: str = None, redirect_uri: str = None) -> str:
     """
-    Build the Google OAuth redirect URL using secrets.
-    Call this to generate the 'Continue with Google' button href.
+    Build the Google OAuth redirect URL.
+    Args are optional — falls back to GOOGLE_CLIENT_ID / GOOGLE_REDIRECT_URI secrets.
+    Both call styles work:
+        get_google_auth_url()
+        get_google_auth_url(GOOGLE_CLIENT_ID, REDIRECT_URI)
     """
     import urllib.parse
 
-    client_id    = _get_secret("GOOGLE_CLIENT_ID")
-    redirect_uri = _get_secret("GOOGLE_REDIRECT_URI")
+    client_id    = client_id    or _get_secret("GOOGLE_CLIENT_ID")
+    redirect_uri = redirect_uri or _get_secret("GOOGLE_REDIRECT_URI")
 
     if not client_id or not redirect_uri:
         raise ValueError(
