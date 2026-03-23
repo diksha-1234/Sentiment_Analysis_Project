@@ -82,6 +82,7 @@ def load_data() -> pd.DataFrame:
                 response = (
                     client.table("sentiment_data")
                     .select("*")
+                    .order("id")
                     .range(offset, offset + batch_size - 1)
                     .execute()
                 )
