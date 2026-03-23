@@ -938,7 +938,7 @@ else:
                 {ico} {sent}
               </div>
               <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#4a6380;letter-spacing:2px;">
-                {conf}% CONFIDENCE &nbsp;·&nbsp; {model_used[:40]}
+                {conf}% CONFIDENCE &nbsp;·&nbsp; {model_used[:80]}
               </div>
             </div>""", unsafe_allow_html=True)
 
