@@ -13,57 +13,68 @@ SUPABASE SETUP — run this SQL once in your Supabase SQL editor:
         username    TEXT UNIQUE NOT NULL,
         name        TEXT NOT NULL,
         email       TEXT,
-        password    TEXT,                  -- NULL for Google-only accounts
-        google_id   TEXT UNIQUE,           -- NULL for password accounts
+        password    TEXT,
+        google_id   TEXT UNIQUE,
         role        TEXT DEFAULT 'user',
         joined      TEXT,
         avatar      TEXT DEFAULT '👤'
     );
-    CREATE INDEX IF NOT EXISTS idx_users_email    ON users(email);
+    CREATE INDEX IF NOT EXISTS idx_users_email     ON users(email);
     CREATE INDEX IF NOT EXISTS idx_users_google_id ON users(google_id);
 ──────────────────────────────────────────────────────────────
 
-STREAMLIT SECRETS (secrets.toml or Supabase dashboard):
-    SUPABASE_URL      = "https://xxxx.supabase.co"
-    SUPABASE_KEY      = "your-anon-key"
+STREAMLIT SECRETS (secrets.toml or Streamlit Cloud dashboard):
+    SUPABASE_URL         = "https://xxxx.supabase.co"
+    SUPABASE_KEY         = "your-anon-key"
     GOOGLE_CLIENT_ID     = "xxxx.apps.googleusercontent.com"
     GOOGLE_CLIENT_SECRET = "GOCSPX-xxxx"
-    GOOGLE_REDIRECT_URI  = "https://your-app.streamlit.app/"   # must match Google console
+    REDIRECT_URI         = "https://your-app.streamlit.app/"
 """
+
+from __future__ import annotations  # makes all type hints strings → no runtime issues
 
 import os
 import json
 import hashlib
 from pathlib import Path
 from datetime import datetime
+from typing import Dict, Optional, Tuple
 
 # ── Path for local dev fallback ───────────────────────────────────────────────
 USERS_JSON = Path("auth/users.json")
 
 # ── In-memory flag so we only ensure-admin once per process ──────────────────
-_admin_ensured: dict[str, bool] = {}
+_admin_ensured: Dict[str, bool] = {}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  HELPERS
 # ─────────────────────────────────────────────────────────────────────────────
 def _get_secret(key: str) -> str:
+    """Read from st.secrets first, then environment variables."""
     try:
         import streamlit as st
         val = st.secrets.get(key, "")
         if val:
-            return val
+            return str(val)
     except Exception:
         pass
     return os.getenv(key, "")
 
 
 def _is_deployed() -> bool:
+    """True when both SUPABASE_URL and SUPABASE_KEY are present."""
     return bool(_get_secret("SUPABASE_URL") and _get_secret("SUPABASE_KEY"))
 
 
 def _get_supabase():
-    from supabase import create_client
+    """Return a Supabase client. Raises ImportError if supabase-py not installed."""
+    try:
+        from supabase import create_client  # type: ignore
+    except ImportError as exc:
+        raise ImportError(
+            "supabase-py is not installed. Add `supabase` to requirements.txt."
+        ) from exc
     return create_client(_get_secret("SUPABASE_URL"), _get_secret("SUPABASE_KEY"))
 
 
@@ -72,15 +83,14 @@ def _hash_password(password: str) -> str:
 
 
 def _check_password(plain: str, stored: str) -> bool:
-    """Check a plaintext password against a stored hash. Never compares plain == stored."""
+    """Verify a plaintext password against a stored hash (SHA-256 or bcrypt)."""
     if not stored:
         return False
-    # SHA-256 (primary)
     if stored == _hash_password(plain):
         return True
-    # bcrypt (legacy compatibility — only if bcrypt is installed)
+    # bcrypt legacy compatibility
     try:
-        import bcrypt
+        import bcrypt  # type: ignore
         if stored.startswith(("$2b$", "$2a$")):
             return bcrypt.checkpw(plain.encode(), stored.encode())
     except ImportError:
@@ -91,27 +101,38 @@ def _check_password(plain: str, stored: str) -> bool:
 def _username_from_email(email: str) -> str:
     """Derive a clean username from an email address."""
     base = email.split("@")[0].lower()
-    # Keep only alphanumeric + underscore
-    cleaned = "".join(c if c.isalnum() or c == "_" else "_" for c in base)
+    cleaned = "".join(c if (c.isalnum() or c == "_") else "_" for c in base)
     return cleaned[:30] or "user"
 
 
+def _user_info(user: Dict) -> Dict:
+    """Normalise a raw user record into a safe public dict."""
+    return {
+        "name":   user.get("name", "User"),
+        "email":  user.get("email", ""),
+        "role":   user.get("role", "user"),
+        "avatar": user.get("avatar", "👤"),
+    }
+
+
 # ─────────────────────────────────────────────────────────────────────────────
-#  LOCAL USER STORE
+#  ADMIN DEFAULTS
 # ─────────────────────────────────────────────────────────────────────────────
-_ADMIN_DEFAULTS = {
+_ADMIN_RECORD: Dict = {
     "name":      "Admin",
     "email":     "admin@pulse.ai",
-    "password":  None,           # set below
+    "password":  _hash_password("1234"),
     "role":      "admin",
     "joined":    "2025-01-01",
     "avatar":    "🔑",
     "google_id": None,
 }
-_ADMIN_DEFAULTS["password"] = _hash_password("1234")
 
 
-def _load_local_users() -> dict:
+# ─────────────────────────────────────────────────────────────────────────────
+#  LOCAL USER STORE
+# ─────────────────────────────────────────────────────────────────────────────
+def _load_local_users() -> Dict:
     if USERS_JSON.exists():
         try:
             with open(USERS_JSON, "r") as f:
@@ -121,7 +142,7 @@ def _load_local_users() -> dict:
     return {}
 
 
-def _save_local_users(users: dict) -> None:
+def _save_local_users(users: Dict) -> None:
     USERS_JSON.parent.mkdir(parents=True, exist_ok=True)
     with open(USERS_JSON, "w") as f:
         json.dump(users, f, indent=2)
@@ -130,13 +151,12 @@ def _save_local_users(users: dict) -> None:
 def _ensure_local_admin() -> None:
     if _admin_ensured.get("local"):
         return
-    users = _load_local_users()
+    users   = _load_local_users()
     changed = False
     if "admin" not in users:
-        users["admin"] = dict(_ADMIN_DEFAULTS)
+        users["admin"] = dict(_ADMIN_RECORD)
         changed = True
     else:
-        # Repair if password was wiped somehow
         if not users["admin"].get("password"):
             users["admin"]["password"] = _hash_password("1234")
             changed = True
@@ -154,7 +174,6 @@ def _ensure_supabase_admin() -> None:
         return
     try:
         client = _get_supabase()
-        # Use upsert so it never duplicates
         client.table("users").upsert(
             {
                 "username": "admin",
@@ -165,50 +184,37 @@ def _ensure_supabase_admin() -> None:
                 "joined":   "2025-01-01",
                 "avatar":   "🔑",
             },
-            on_conflict="username",   # update if already exists
+            on_conflict="username",
         ).execute()
         _admin_ensured["supabase"] = True
     except Exception as e:
+        # Non-fatal: log and continue — admin may already exist
         print(f"[Auth] Could not ensure admin in Supabase: {e}")
+        _admin_ensured["supabase"] = True  # Don't retry on every call
 
 
-def _get_supabase_user_by_username(username: str) -> dict | None:
+def _get_supabase_user(column: str, value: str) -> Optional[Dict]:
+    """Generic single-row lookup by any unique column."""
     try:
-        res = _get_supabase().table("users").select("*").eq("username", username).execute()
+        res = _get_supabase().table("users").select("*").eq(column, value).execute()
         return res.data[0] if res.data else None
     except Exception as e:
-        print(f"[Auth] Supabase username lookup failed: {e}")
+        print(f"[Auth] Supabase lookup ({column}={value}) failed: {e}")
         return None
 
 
-def _get_supabase_user_by_email(email: str) -> dict | None:
+def _upsert_supabase_user(user_data: Dict, conflict_col: str = "username") -> bool:
     try:
-        res = _get_supabase().table("users").select("*").eq("email", email).execute()
-        return res.data[0] if res.data else None
-    except Exception as e:
-        print(f"[Auth] Supabase email lookup failed: {e}")
-        return None
-
-
-def _get_supabase_user_by_google_id(google_id: str) -> dict | None:
-    try:
-        res = _get_supabase().table("users").select("*").eq("google_id", google_id).execute()
-        return res.data[0] if res.data else None
-    except Exception as e:
-        print(f"[Auth] Supabase google_id lookup failed: {e}")
-        return None
-
-
-def _upsert_supabase_user(user_data: dict, conflict_col: str = "username") -> bool:
-    try:
-        _get_supabase().table("users").upsert(user_data, on_conflict=conflict_col).execute()
+        _get_supabase().table("users").upsert(
+            user_data, on_conflict=conflict_col
+        ).execute()
         return True
     except Exception as e:
         print(f"[Auth] Supabase upsert failed: {e}")
         return False
 
 
-def _insert_supabase_user(user_data: dict) -> bool:
+def _insert_supabase_user(user_data: Dict) -> bool:
     try:
         _get_supabase().table("users").insert(user_data).execute()
         return True
@@ -218,22 +224,11 @@ def _insert_supabase_user(user_data: dict) -> bool:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  SHARED RESULT BUILDER
-# ─────────────────────────────────────────────────────────────────────────────
-def _user_info(user: dict) -> dict:
-    return {
-        "name":   user.get("name", "User"),
-        "email":  user.get("email", ""),
-        "role":   user.get("role", "user"),
-        "avatar": user.get("avatar", "👤"),
-    }
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 #  PUBLIC API — PASSWORD AUTH
 # ─────────────────────────────────────────────────────────────────────────────
-def login(username: str, password: str) -> tuple[bool, str, dict]:
+def login(username: str, password: str) -> Tuple[bool, str, Dict]:
     """
+    Authenticate with username + password.
     Returns (success, message, user_info_dict).
     user_info_dict keys: name, email, role, avatar
     """
@@ -241,7 +236,7 @@ def login(username: str, password: str) -> tuple[bool, str, dict]:
 
     if _is_deployed():
         _ensure_supabase_admin()
-        user = _get_supabase_user_by_username(username)
+        user = _get_supabase_user("username", username)
         if not user:
             return False, "User not found.", {}
         if not user.get("password"):
@@ -263,8 +258,14 @@ def login(username: str, password: str) -> tuple[bool, str, dict]:
         return True, "OK", _user_info(user)
 
 
-def signup(username: str, password: str, name: str, email: str = "") -> tuple[bool, str]:
+def signup(
+    username: str,
+    password: str,
+    name: str,
+    email: str = "",
+) -> Tuple[bool, str]:
     """
+    Register a new user.
     Returns (success, message).
     """
     username = username.strip().lower()
@@ -284,9 +285,9 @@ def signup(username: str, password: str, name: str, email: str = "") -> tuple[bo
 
     if _is_deployed():
         _ensure_supabase_admin()
-        if _get_supabase_user_by_username(username):
+        if _get_supabase_user("username", username):
             return False, "Username already taken."
-        if email and _get_supabase_user_by_email(email):
+        if email and _get_supabase_user("email", email):
             return False, "An account with this email already exists."
         ok = _insert_supabase_user({
             "username": username,
@@ -297,8 +298,9 @@ def signup(username: str, password: str, name: str, email: str = "") -> tuple[bo
             "joined":   now,
             "avatar":   "👤",
         })
-        return (True, "Account created successfully! You can now sign in.") if ok \
-               else (False, "Could not create account. Please try again.")
+        if ok:
+            return True, "Account created successfully! You can now sign in."
+        return False, "Could not create account. Please try again."
 
     else:
         _ensure_local_admin()
@@ -323,23 +325,28 @@ def signup(username: str, password: str, name: str, email: str = "") -> tuple[bo
 # ─────────────────────────────────────────────────────────────────────────────
 #  PUBLIC API — GOOGLE OAUTH
 # ─────────────────────────────────────────────────────────────────────────────
-def get_google_auth_url(client_id: str = None, redirect_uri: str = None) -> str:
+def get_google_auth_url(
+    client_id: Optional[str] = None,
+    redirect_uri: Optional[str] = None,
+) -> str:
     """
     Build the Google OAuth redirect URL.
-    Args are optional — falls back to GOOGLE_CLIENT_ID / GOOGLE_REDIRECT_URI secrets.
-    Both call styles work:
-        get_google_auth_url()
+
+    app.py calls this as:
         get_google_auth_url(GOOGLE_CLIENT_ID, REDIRECT_URI)
+
+    Falls back to secrets if args are omitted / empty.
+    Secret key for redirect URI is REDIRECT_URI (matches app.py).
     """
     import urllib.parse
 
     client_id    = client_id    or _get_secret("GOOGLE_CLIENT_ID")
-    redirect_uri = redirect_uri or _get_secret("GOOGLE_REDIRECT_URI")
+    redirect_uri = redirect_uri or _get_secret("REDIRECT_URI")
 
-    if not client_id or not redirect_uri:
-        raise ValueError(
-            "GOOGLE_CLIENT_ID and GOOGLE_REDIRECT_URI must be set in secrets / env vars."
-        )
+    if not client_id:
+        raise ValueError("GOOGLE_CLIENT_ID must be set in secrets / env vars.")
+    if not redirect_uri:
+        raise ValueError("REDIRECT_URI must be set in secrets / env vars.")
 
     params = {
         "client_id":     client_id,
@@ -352,19 +359,23 @@ def get_google_auth_url(client_id: str = None, redirect_uri: str = None) -> str:
     return f"https://accounts.google.com/o/oauth2/v2/auth?{urllib.parse.urlencode(params)}"
 
 
-def exchange_google_code(code: str) -> dict | None:
+def exchange_google_code(code: str) -> Optional[Dict]:
     """
-    Exchange an OAuth code for Google user info.
-    Returns raw Google profile dict or None on failure.
+    Exchange an OAuth authorisation code for Google user info.
+    Returns the raw Google profile dict, or None on failure.
     """
-    import requests as req
+    try:
+        import requests as _requests  # type: ignore
+    except ImportError:
+        print("[Auth] 'requests' library not installed — cannot exchange Google code.")
+        return None
 
     client_id     = _get_secret("GOOGLE_CLIENT_ID")
     client_secret = _get_secret("GOOGLE_CLIENT_SECRET")
-    redirect_uri  = _get_secret("GOOGLE_REDIRECT_URI")
+    redirect_uri  = _get_secret("REDIRECT_URI")
 
     try:
-        token_res = req.post(
+        token_res = _requests.post(
             "https://oauth2.googleapis.com/token",
             data={
                 "code":          code,
@@ -378,66 +389,69 @@ def exchange_google_code(code: str) -> dict | None:
         token_data   = token_res.json()
         access_token = token_data.get("access_token")
         if not access_token:
-            print(f"[Auth] Google token exchange failed: {token_data.get('error_description', token_data)}")
+            print(
+                f"[Auth] Google token exchange failed: "
+                f"{token_data.get('error_description', token_data)}"
+            )
             return None
 
-        info_res = req.get(
+        info_res = _requests.get(
             "https://www.googleapis.com/oauth2/v2/userinfo",
             headers={"Authorization": f"Bearer {access_token}"},
             timeout=10,
         )
         return info_res.json()
+
     except Exception as e:
         print(f"[Auth] Google OAuth exchange failed: {e}")
         return None
 
 
-def google_login_or_register(google_info: dict) -> tuple[bool, str, dict]:
+def google_login_or_register(google_info: Dict) -> Tuple[bool, str, Dict]:
     """
-    The missing bridge function.
-
     Takes the dict returned by exchange_google_code() and:
-      1. Finds an existing account by google_id (returning user).
-      2. Links to an existing account by email if google_id not found.
-      3. Auto-creates a new account if neither match.
+      1. Finds an existing account by google_id  (returning user).
+      2. Links to an existing account by email   (email match).
+      3. Auto-creates a new account              (new user).
 
     Returns (success, message, user_info_dict).
     """
     google_id = google_info.get("id") or google_info.get("sub")
     email     = (google_info.get("email") or "").strip().lower()
     name      = google_info.get("name") or google_info.get("given_name") or "User"
-    avatar    = "🔵"   # distinguishes Google accounts visually
+    avatar    = "🔵"
     now       = datetime.now().strftime("%Y-%m-%d")
 
     if not google_id:
         return False, "Google did not return a valid user ID.", {}
 
-    # ── DEPLOYED (Supabase) path ───────────────────────────────────────────
+    # ── DEPLOYED (Supabase) ────────────────────────────────────────────────
     if _is_deployed():
         _ensure_supabase_admin()
 
         # 1. Known Google user — fast path
-        user = _get_supabase_user_by_google_id(google_id)
+        user = _get_supabase_user("google_id", google_id)
         if user:
             return True, "OK", _user_info(user)
 
         # 2. Existing account with same email — link it
         if email:
-            user = _get_supabase_user_by_email(email)
+            user = _get_supabase_user("email", email)
             if user:
-                # Link google_id to the existing account
-                _get_supabase().table("users") \
-                    .update({"google_id": google_id}) \
-                    .eq("username", user["username"]) \
-                    .execute()
+                try:
+                    _get_supabase().table("users") \
+                        .update({"google_id": google_id}) \
+                        .eq("username", user["username"]) \
+                        .execute()
+                except Exception as e:
+                    print(f"[Auth] Failed to link google_id: {e}")
                 return True, "OK", _user_info(user)
 
-        # 3. Brand-new user — create account
+        # 3. Brand-new user
         base_username = _username_from_email(email) if email else "user"
         username      = base_username
         suffix        = 1
-        # Avoid username collision
-        while _get_supabase_user_by_username(username):
+        while _get_supabase_user("username", username):
             username = f"{base_username}{suffix}"
             suffix  += 1
 
@@ -445,7 +459,7 @@ def google_login_or_register(google_info: dict) -> tuple[bool, str, dict]:
             "username":  username,
             "name":      name,
             "email":     email,
-            "password":  None,          # Google-only account — no password
+            "password":  None,
             "google_id": google_id,
             "role":      "user",
             "joined":    now,
@@ -456,13 +470,13 @@ def google_login_or_register(google_info: dict) -> tuple[bool, str, dict]:
             return True, "Account created via Google.", _user_info(new_user)
         return False, "Could not create account. Please try again.", {}
 
-    # ── LOCAL path ────────────────────────────────────────────────────────
+    # ── LOCAL ──────────────────────────────────────────────────────────────
     else:
         _ensure_local_admin()
         users = _load_local_users()
 
         # 1. Known Google user
-        for uname, u in users.items():
+        for _uname, u in users.items():
             if u.get("google_id") == google_id:
                 return True, "OK", _user_info(u)
 
