@@ -641,4 +641,4 @@ try:
          print(f"[BALANCE] Dataset balanced to {min_count} samples per class")
 except Exception as e:
          print(f"[BALANCE WARNING] Could not balance dataset: {e}")
-         return df
+return df
