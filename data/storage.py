@@ -4,15 +4,13 @@ data/storage.py — Persistent Storage for Pulse Sentiment AI
 Uses Supabase (PostgreSQL) when deployed on Streamlit Cloud.
 Falls back to local data/data.csv when running locally.
 
-FEATURES:
-  ✅ Sentiment data persistence (load/save rows)
-  ✅ Translation cache — translations stored in Supabase `translated` column
-     so the same Hindi/Tamil/Bengali text is never sent to API twice
-  ✅ Stats helper
-  ✅ Local CSV fallback for development
+FIXES:
+  ✅ force_refresh() — hard-wipes all in-memory caches
+  ✅ _translation_memory cleared on force_refresh
+  ✅ load_data() always hits Supabase fresh (no @st.cache_data here)
+  ✅ get_stats() always hits Supabase fresh
 
 Supabase table setup (run once in SQL Editor):
-  ── sentiment_data table ──────────────────────────────────
   CREATE TABLE sentiment_data (
       id         BIGSERIAL PRIMARY KEY,
       scheme     TEXT,
@@ -23,11 +21,9 @@ Supabase table setup (run once in SQL Editor):
       translated TEXT DEFAULT ''
   );
 
-  ── Add translated column if table already exists ─────────
   ALTER TABLE sentiment_data
   ADD COLUMN IF NOT EXISTS translated TEXT DEFAULT '';
 
-  ── RPC function to bypass row limit (run once) ───────────
   CREATE OR REPLACE FUNCTION get_all_sentiment_data()
   RETURNS SETOF sentiment_data
   LANGUAGE sql
@@ -43,15 +39,16 @@ from pathlib import Path
 
 DATA_CSV = Path("data/data.csv")
 
-# ── Columns the app expects ───────────────────────────────────────────────────
 COLUMNS = ["ID", "Scheme", "Source", "Language", "Comment", "Sentiment"]
+
+# ── In-memory translation cache (within session) ──────────────────────────────
+_translation_memory: dict = {}
 
 
 # ═════════════════════════════════════════════════════════════════════════════
 #  HELPERS
 # ═════════════════════════════════════════════════════════════════════════════
 def _get_secret(key: str) -> str:
-    """Get secret from Streamlit Cloud secrets or local .env."""
     try:
         import streamlit as st
         return st.secrets.get(key, os.getenv(key, ""))
@@ -60,12 +57,10 @@ def _get_secret(key: str) -> str:
 
 
 def _is_deployed() -> bool:
-    """True when running on Streamlit Cloud with Supabase configured."""
     return bool(_get_secret("SUPABASE_URL") and _get_secret("SUPABASE_KEY"))
 
 
 def _get_client():
-    """Get Supabase client."""
     from supabase import create_client
     url = _get_secret("SUPABASE_URL")
     key = _get_secret("SUPABASE_KEY")
@@ -73,10 +68,6 @@ def _get_client():
 
 
 def _df_from_records(records: list) -> pd.DataFrame:
-    """
-    Convert Supabase records to a clean DataFrame
-    with columns renamed to what the app expects.
-    """
     df = pd.DataFrame(records)
     df = df.rename(columns={
         "id":         "ID",
@@ -92,34 +83,51 @@ def _df_from_records(records: list) -> pd.DataFrame:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  LOAD DATA
-#  Uses RPC to bypass Supabase's 1000-row REST limit.
-#  Falls back to paginated select if RPC is not yet created.
+#  FORCE REFRESH — wipes ALL in-memory state so next load_data() call
+#  hits Supabase completely fresh.  Call this from the app after any
+#  manual Supabase delete / truncate.
+# ═════════════════════════════════════════════════════════════════════════════
+def force_refresh() -> None:
+    """
+    Hard-wipe every in-memory cache in this module.
+    After calling this, the next load_data() / get_stats() will
+    query Supabase fresh regardless of what was cached before.
+    """
+    global _translation_memory
+    _translation_memory = {}
+
+    # Also clear Streamlit's own function-level caches so
+    # _cached_preprocess and _cached_train in app.py are invalidated.
+    try:
+        import streamlit as st
+        st.cache_data.clear()
+        st.cache_resource.clear()
+        print("[Storage] force_refresh: all caches cleared")
+    except Exception as e:
+        print(f"[Storage] force_refresh: could not clear st caches: {e}")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  LOAD DATA  — always fresh, no @st.cache_data here on purpose
 # ═════════════════════════════════════════════════════════════════════════════
 def load_data() -> pd.DataFrame:
     """
-    Load all sentiment rows.
-    Deployed  → reads from Supabase via RPC (no row limit)
-    Local     → reads from data/data.csv
+    Load all sentiment rows directly from Supabase (no caching).
+    Caching is handled upstream in app.py by _cached_preprocess.
     """
     if _is_deployed():
         client = _get_client()
 
-        # ── Method 1: RPC — bypasses Supabase 1000-row REST limit ────────────
-        # Run this SQL once in Supabase SQL Editor to enable:
-        #   CREATE OR REPLACE FUNCTION get_all_sentiment_data()
-        #   RETURNS SETOF sentiment_data LANGUAGE sql SECURITY DEFINER AS $$
-        #     SELECT * FROM sentiment_data ORDER BY id;
-        #   $$;
+        # Method 1: RPC (bypasses 1000-row REST limit)
         try:
             response = client.rpc("get_all_sentiment_data").execute()
             if response.data:
                 print(f"[Storage] Loaded {len(response.data)} rows via RPC")
                 return _df_from_records(response.data)
         except Exception as e:
-            print(f"[Storage] RPC load failed: {e} — falling back to paginated select")
+            print(f"[Storage] RPC load failed: {e} — trying paginated select")
 
-        # ── Method 2: Paginated select — fallback if RPC not created yet ─────
+        # Method 2: Paginated select fallback
         try:
             all_data   = []
             batch_size = 1000
@@ -149,7 +157,7 @@ def load_data() -> pd.DataFrame:
             print(f"[Storage] Supabase load failed: {e}")
             return pd.DataFrame(columns=COLUMNS)
 
-    # ── Local fallback ────────────────────────────────────────────────────────
+    # Local fallback
     if DATA_CSV.exists():
         try:
             return pd.read_csv(DATA_CSV, encoding="utf-8")
@@ -159,15 +167,27 @@ def load_data() -> pd.DataFrame:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+#  STATS — always live from Supabase, never cached
+# ═════════════════════════════════════════════════════════════════════════════
+def get_stats() -> dict:
+    """Always queries Supabase live — never returns a cached count."""
+    if _is_deployed():
+        try:
+            client = _get_client()
+            count  = client.table("sentiment_data").select(
+                "*", count="exact"
+            ).limit(1).execute()          # limit(1) so no rows transferred, just count
+            return {"total_rows": count.count or 0}
+        except Exception as e:
+            print(f"[Storage] get_stats failed: {e}")
+    df = load_data()
+    return {"total_rows": len(df)}
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 #  SAVE NEW ROWS
 # ═════════════════════════════════════════════════════════════════════════════
 def save_rows(rows: list) -> int:
-    """
-    Save new unique rows.
-    Deployed  → Supabase (duplicates silently skipped via UNIQUE on comment)
-    Local     → data/data.csv
-    Returns number of rows actually saved.
-    """
     if not rows:
         return 0
     if _is_deployed():
@@ -177,7 +197,6 @@ def save_rows(rows: list) -> int:
 
 
 def _save_to_supabase(rows: list) -> int:
-    """Insert rows into Supabase in batches of 100."""
     try:
         client    = _get_client()
         formatted = []
@@ -222,7 +241,6 @@ def _save_to_supabase(rows: list) -> int:
 
 
 def _save_to_csv(rows: list) -> int:
-    """Save rows to local CSV with deduplication."""
     import csv
 
     DATA_CSV.parent.mkdir(exist_ok=True)
@@ -270,30 +288,15 @@ def _save_to_csv(rows: list) -> int:
 
 # ═════════════════════════════════════════════════════════════════════════════
 #  TRANSLATION CACHE
-#  Stores translations in the `translated` column of sentiment_data.
-#  Same text is never sent to the translation API twice.
 # ═════════════════════════════════════════════════════════════════════════════
-
-# ── In-memory cache (within session) ─────────────────────────────────────────
-_translation_memory: dict = {}
-
-
 def get_cached_translation(text: str):
-    """
-    Look up a translation.
-    1. Check in-memory dict first  (fastest — no network)
-    2. Check Supabase              (fast — single DB query)
-    3. Return None if not found    (caller must call translation API)
-    """
     text = text.strip()
     if not text:
         return None
 
-    # Level 1: in-memory
     if text in _translation_memory:
         return _translation_memory[text]
 
-    # Level 2: Supabase
     if not _is_deployed():
         return None
 
@@ -318,10 +321,6 @@ def get_cached_translation(text: str):
 
 
 def save_cached_translation(text: str, translated: str) -> None:
-    """
-    Save a translation result back to Supabase so it persists forever.
-    Also saves to in-memory cache for the current session.
-    """
     text       = text.strip()
     translated = translated.strip()
 
@@ -344,7 +343,6 @@ def save_cached_translation(text: str, translated: str) -> None:
 
 
 def get_translation_cache_stats() -> dict:
-    """Returns stats about the translation cache."""
     stats = {"in_memory_count": len(_translation_memory), "supabase_cached": 0}
     if _is_deployed():
         try:
@@ -359,21 +357,3 @@ def get_translation_cache_stats() -> dict:
         except Exception:
             pass
     return stats
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-#  STATS HELPER
-# ═════════════════════════════════════════════════════════════════════════════
-def get_stats() -> dict:
-    """Returns quick stats without loading full dataset."""
-    if _is_deployed():
-        try:
-            client = _get_client()
-            count  = client.table("sentiment_data").select(
-                "*", count="exact"
-            ).execute()
-            return {"total_rows": count.count or 0}
-        except Exception:
-            pass
-    df = load_data()
-    return {"total_rows": len(df)}
