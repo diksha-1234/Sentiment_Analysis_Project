@@ -26,6 +26,15 @@ Supabase table setup (run once in SQL Editor):
   ── Add translated column if table already exists ─────────
   ALTER TABLE sentiment_data
   ADD COLUMN IF NOT EXISTS translated TEXT DEFAULT '';
+
+  ── RPC function to bypass row limit (run once) ───────────
+  CREATE OR REPLACE FUNCTION get_all_sentiment_data()
+  RETURNS SETOF sentiment_data
+  LANGUAGE sql
+  SECURITY DEFINER
+  AS $$
+    SELECT * FROM sentiment_data ORDER BY id;
+  $$;
 """
 
 import os
@@ -63,21 +72,58 @@ def _get_client():
     return create_client(url, key)
 
 
+def _df_from_records(records: list) -> pd.DataFrame:
+    """
+    Convert Supabase records to a clean DataFrame
+    with columns renamed to what the app expects.
+    """
+    df = pd.DataFrame(records)
+    df = df.rename(columns={
+        "id":         "ID",
+        "scheme":     "Scheme",
+        "source":     "Source",
+        "language":   "Language",
+        "comment":    "Comment",
+        "sentiment":  "Sentiment",
+        "translated": "Translated",
+    })
+    keep = [c for c in COLUMNS if c in df.columns]
+    return df[keep].reset_index(drop=True)
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 #  LOAD DATA
+#  Uses RPC to bypass Supabase's 1000-row REST limit.
+#  Falls back to paginated select if RPC is not yet created.
 # ═════════════════════════════════════════════════════════════════════════════
 def load_data() -> pd.DataFrame:
     """
     Load all sentiment rows.
-    Deployed  → reads from Supabase
+    Deployed  → reads from Supabase via RPC (no row limit)
     Local     → reads from data/data.csv
     """
     if _is_deployed():
+        client = _get_client()
+
+        # ── Method 1: RPC — bypasses Supabase 1000-row REST limit ────────────
+        # Run this SQL once in Supabase SQL Editor to enable:
+        #   CREATE OR REPLACE FUNCTION get_all_sentiment_data()
+        #   RETURNS SETOF sentiment_data LANGUAGE sql SECURITY DEFINER AS $$
+        #     SELECT * FROM sentiment_data ORDER BY id;
+        #   $$;
         try:
-            client   = _get_client()
-            all_data = []
+            response = client.rpc("get_all_sentiment_data").execute()
+            if response.data:
+                print(f"[Storage] Loaded {len(response.data)} rows via RPC")
+                return _df_from_records(response.data)
+        except Exception as e:
+            print(f"[Storage] RPC load failed: {e} — falling back to paginated select")
+
+        # ── Method 2: Paginated select — fallback if RPC not created yet ─────
+        try:
+            all_data   = []
             batch_size = 1000
-            offset = 0
+            offset     = 0
             while True:
                 response = (
                     client.table("sentiment_data")
@@ -87,30 +133,23 @@ def load_data() -> pd.DataFrame:
                     .execute()
                 )
                 if not response.data:
-                   break
+                    break
                 all_data.extend(response.data)
                 if len(response.data) < batch_size:
-                   break
+                    break
                 offset += batch_size
+
             if all_data:
-                df = pd.DataFrame(all_data)
-                df = df.rename(columns={
-                    "id":        "ID",
-                    "scheme":    "Scheme",
-                    "source":    "Source",
-                    "language":  "Language",
-                    "comment":   "Comment",
-                    "sentiment": "Sentiment",
-                    "translated":"Translated",
-                })
-                keep = [c for c in COLUMNS if c in df.columns]
-                return df[keep].reset_index(drop=True)
+                print(f"[Storage] Loaded {len(all_data)} rows via paginated select")
+                return _df_from_records(all_data)
             else:
                 return pd.DataFrame(columns=COLUMNS)
+
         except Exception as e:
             print(f"[Storage] Supabase load failed: {e}")
+            return pd.DataFrame(columns=COLUMNS)
 
-    # Local fallback
+    # ── Local fallback ────────────────────────────────────────────────────────
     if DATA_CSV.exists():
         try:
             return pd.read_csv(DATA_CSV, encoding="utf-8")
@@ -233,39 +272,28 @@ def _save_to_csv(rows: list) -> int:
 #  TRANSLATION CACHE
 #  Stores translations in the `translated` column of sentiment_data.
 #  Same text is never sent to the translation API twice.
-#
-#  Flow:
-#    translate_to_english("यह बेकार है", "hi")
-#      → get_cached_translation("यह बेकार है")
-#          → found in Supabase → return "This is useless"  ✅ no API call
-#          → not found → call Google Translate API
-#                      → save_cached_translation("यह बेकार है", "This is useless")
-#                      → return "This is useless"
 # ═════════════════════════════════════════════════════════════════════════════
 
-# ── In-memory cache (within session — avoids repeated Supabase lookups) ──────
-_translation_memory: dict[str, str] = {}
+# ── In-memory cache (within session) ─────────────────────────────────────────
+_translation_memory: dict = {}
 
 
-def get_cached_translation(text: str) -> str | None:
+def get_cached_translation(text: str):
     """
     Look up a translation.
     1. Check in-memory dict first  (fastest — no network)
     2. Check Supabase              (fast — single DB query)
     3. Return None if not found    (caller must call translation API)
-
-    Only active on deployment. Returns None locally so local dev
-    always uses the translation API directly.
     """
     text = text.strip()
     if not text:
         return None
 
-    # ── Level 1: in-memory (same session) ────────────────────────────────────
+    # Level 1: in-memory
     if text in _translation_memory:
         return _translation_memory[text]
 
-    # ── Level 2: Supabase (across sessions) ──────────────────────────────────
+    # Level 2: Supabase
     if not _is_deployed():
         return None
 
@@ -281,7 +309,6 @@ def get_cached_translation(text: str) -> str | None:
         if res.data:
             cached = res.data[0].get("translated", "").strip()
             if cached:
-                # Promote to in-memory so next lookup is instant
                 _translation_memory[text] = cached
                 return cached
         return None
@@ -294,8 +321,6 @@ def save_cached_translation(text: str, translated: str) -> None:
     """
     Save a translation result back to Supabase so it persists forever.
     Also saves to in-memory cache for the current session.
-
-    Only active on deployment — no-op locally.
     """
     text       = text.strip()
     translated = translated.strip()
@@ -303,7 +328,6 @@ def save_cached_translation(text: str, translated: str) -> None:
     if not text or not translated:
         return
 
-    # Always save to in-memory
     _translation_memory[text] = translated
 
     if not _is_deployed():
@@ -311,7 +335,6 @@ def save_cached_translation(text: str, translated: str) -> None:
 
     try:
         client = _get_client()
-        # Update the row that has this comment text
         client.table("sentiment_data") \
             .update({"translated": translated}) \
             .eq("comment", text) \
@@ -321,14 +344,8 @@ def save_cached_translation(text: str, translated: str) -> None:
 
 
 def get_translation_cache_stats() -> dict:
-    """
-    Returns stats about the translation cache.
-    Useful for debugging — call from app.py Data tab if needed.
-    """
-    stats = {
-        "in_memory_count": len(_translation_memory),
-        "supabase_cached":  0,
-    }
+    """Returns stats about the translation cache."""
+    stats = {"in_memory_count": len(_translation_memory), "supabase_cached": 0}
     if _is_deployed():
         try:
             client = _get_client()
