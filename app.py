@@ -1065,6 +1065,20 @@ else:                                                          # ← 0 spaces
         else:
             st.markdown("<div class='card'>", unsafe_allow_html=True)
             st.markdown("<div class='label'>Fetch Live Data</div>", unsafe_allow_html=True)
+            # ── Force refresh from Supabase ───────────────────────────────────────────
+           rc1, rc2 = st.columns([1, 5])
+           with rc1:
+               if st.button("🗑️ Clear Cache", key="btn_clear_cache"):
+                 from data.storage import force_refresh
+                 force_refresh()
+                 st.session_state.analysis_done   = False
+                 st.session_state.df_store        = None
+                 st.session_state.results_store   = None
+                 st.session_state.best_name_store = None
+                 st.session_state.metrics_store   = None
+                 st.session_state.fetch_done      = False
+                 st.success("✓ All caches wiped. Dataset Status will now reflect live Supabase data.")
+                 st.rerun()
 
             st.markdown("""
             <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:10px;margin-bottom:18px;">
