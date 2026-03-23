@@ -453,7 +453,7 @@ def fetch_news(scheme, limit=200, cb=None):
 
     rows = []
     seen = set()
-    for kw in SCHEME_KEYWORDS.get(scheme, [scheme])[:2]:
+    for kw in SCHEME_KEYWORDS.get(scheme, [scheme])[:1]:
         if len(rows) >= limit: break
         try:
             resp = api.get_everything(
@@ -574,8 +574,6 @@ def fetch_google_news_rss(scheme: str, limit: int = 200, cb=None) -> list:
 # ═════════════════════════════════════════════════════════════════════════════
 
 # Hindi news RSS feeds — all official, no API key needed
-# UPDATED: Fixed broken Navbharat Times and Jagran URLs
-# Added NDTV Hindi and ABP Live as reliable backups
 _HINDI_RSS_FEEDS = [
     # Dainik Bhaskar — India's largest Hindi newspaper
     ("https://www.bhaskar.com/rss-feed/1061/",                      "Dainik Bhaskar"),
@@ -690,10 +688,16 @@ def fetch_hindi_news_rss(scheme: str, limit: int = 150, cb=None) -> list:
                 # Combine for keyword matching
                 combined = (title_text + " " + desc_text).lower()
 
-                # Only include if related to the scheme
-                # Check if any keyword appears in the article
-                if not any(kw in combined for kw in keywords):
-                    continue
+                # Prefer scheme-related articles but don't drop everything
+                # For schemes with low media coverage, accept any government/scheme content
+                govt_keywords = {
+                     "scheme", "yojana", "sarkar", "government", "modi", "india",
+                     "योजना", "सरकार", "भारत", "केंद्र", "लाभ", "किसान"
+                }
+                is_scheme_related = any(kw in combined for kw in keywords)
+                is_govt_related   = any(kw in combined for kw in govt_keywords)
+                if not is_scheme_related and not is_govt_related:
+                   continue
 
                 # Process title
                 if title_text:
