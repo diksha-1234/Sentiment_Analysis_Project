@@ -60,6 +60,11 @@ def _cached_preprocess(data_hash: str, scheme: str):
         df_f  = df_raw[df_raw["Scheme"].str.contains(key, case=False, na=False)]
         df_raw = df_f if len(df_f) >= 10 else df_raw
     return preprocess_dataframe(df_raw)
+@st.cache_resource
+def _cached_train(data_hash: str, scheme: str, use_dl: bool, use_tr: bool):
+    df_inner = _cached_preprocess(data_hash, scheme)
+    return train_models(df_inner["Cleaned"], df_inner["Sentiment"],
+            use_dl=use_dl, use_transformers=use_tr, df_meta=df_inner)
 
 # ── Config ────────────────────────────────────────────────────────────────────
 st.set_page_config(page_title="Pulse · Sentiment AI", page_icon="🧠",
@@ -629,13 +634,6 @@ else:                                                          # ← 0 spaces
 
             with st.spinner("Step 1 / 2 — Preprocessing & labelling…"):
                 df = _cached_preprocess(data_hash, scheme)
-
-            @st.cache_resource
-            def _cached_train(data_hash, scheme, use_dl, use_tr):
-                df_inner = _cached_preprocess(data_hash, scheme)
-                return train_models(df_inner["Cleaned"], df_inner["Sentiment"],
-                        use_dl=use_dl, use_transformers=use_tr, df_meta=df_inner)
-
             with st.spinner("Step 2 / 2 — Training & benchmarking all models…"):
                 results, best_name = _cached_train(data_hash, scheme, use_dl, use_tr)
             metrics = results
