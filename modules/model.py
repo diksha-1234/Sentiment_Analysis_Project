@@ -10,11 +10,14 @@ ORIGINAL OVERFITTING FIXES (all unchanged):
 
 SMART SELECTION (new):
   ✅ FIX 6: _analyze_data() — sarcasm ratio, lang diversity, social media score
-  ✅ FIX 7: _select_candidate_types() — volume + avg_len + GPU + lang gates
+  ✅ FIX 7: _select_candidate_types() — volume + avg_len + lang gates
   ✅ FIX 8: _compute_lexicon_penalties() — TextBlob vs VADER different penalties
   ✅ FIX 9: train_models() accepts df_meta for richer profiling
-  ✅ FIX 10: Transformer uses df_meta["Original"] multilingual text
   ✅ BUG FIX: X_te_orig was referenced but never defined in original code
+
+NOTE: Deep Learning (LSTM/BiLSTM/CNN) and Transformer (ALBERT/DistilBERT/mBERT)
+      sections have been removed. Classical ML + NLP/Lexicon models run only.
+      This keeps the app deployable on Streamlit Cloud without tensorflow/transformers.
 """
 
 import time
@@ -37,6 +40,7 @@ from sklearn.tree                    import DecisionTreeClassifier
 from sklearn.metrics                 import (accuracy_score, f1_score, precision_score,
                                              recall_score, confusion_matrix, classification_report)
 from sklearn.preprocessing           import LabelEncoder
+
 
 def _get_sarcasm_score(text: str) -> float:
     try:
@@ -85,7 +89,7 @@ _SARC_EMOJIS = {"🙄","😒","😏","🤨","🙃","😤","😑","🤡","💀","
 def _sarcasm_score_standalone(text: str) -> float:
     score = 0.0
     tl = text.lower()
-    for e in _SARC_EMOJIS_S:
+    for e in _SARC_EMOJIS:
         if e in text: score += 0.45; break
     for pat in _SARC_STANDALONE:
         if pat.search(tl): score += 0.35; break
@@ -167,78 +171,6 @@ class _TextBlobModel:
     def is_available(self): return self._available
 
 
-def _build_dl_models(vocab_size, max_len, num_classes):
-    models = {}
-    try:
-        import tensorflow as tf
-        from tensorflow.keras.models import Sequential
-        from tensorflow.keras.layers import (Embedding, LSTM, Bidirectional, Conv1D,
-                                             GlobalMaxPooling1D, Dense, Dropout, SpatialDropout1D)
-        tf.get_logger().setLevel("ERROR")
-        embed_dim = 64
-        models["LSTM"] = Sequential([
-            Embedding(vocab_size, embed_dim, input_length=max_len),
-            SpatialDropout1D(0.2), LSTM(64, dropout=0.2, recurrent_dropout=0.2),
-            Dense(32, activation="relu"), Dropout(0.3),
-            Dense(num_classes, activation="softmax"),
-        ], name="LSTM")
-        models["LSTM"].compile(optimizer="adam", loss="sparse_categorical_crossentropy", metrics=["accuracy"])
-        models["BiLSTM"] = Sequential([
-            Embedding(vocab_size, embed_dim, input_length=max_len),
-            SpatialDropout1D(0.2), Bidirectional(LSTM(64, dropout=0.2, recurrent_dropout=0.2)),
-            Dense(32, activation="relu"), Dropout(0.3),
-            Dense(num_classes, activation="softmax"),
-        ], name="BiLSTM")
-        models["BiLSTM"].compile(optimizer="adam", loss="sparse_categorical_crossentropy", metrics=["accuracy"])
-        models["CNN-Text"] = Sequential([
-            Embedding(vocab_size, embed_dim, input_length=max_len),
-            SpatialDropout1D(0.2), Conv1D(128, 5, activation="relu"),
-            GlobalMaxPooling1D(), Dense(64, activation="relu"), Dropout(0.3),
-            Dense(num_classes, activation="softmax"),
-        ], name="CNN-Text")
-        models["CNN-Text"].compile(optimizer="adam", loss="sparse_categorical_crossentropy", metrics=["accuracy"])
-    except ImportError:
-        pass
-    return models
-
-
-class _TransformerSentiment:
-    def __init__(self, model_name, display_name):
-        self.model_name   = model_name
-        self.display_name = display_name
-        self._pipeline    = None
-        self._available   = False
-        self.model_type   = "Transformer/BERT"
-    def _load(self):
-        if self._pipeline is not None: return True
-        try:
-            from transformers import pipeline
-            self._pipeline = pipeline(
-                "text-classification", model=self.model_name,
-                truncation=True, max_length=128, device=-1,
-            )
-            self._available = True
-            return True
-        except Exception: return False
-    def predict_bulk(self, texts, label_map, max_samples=200):
-        if not self._load(): return None
-        reverse = {v:k for k,v in label_map.items()}
-        preds = []
-        texts = [str(t)[:512] for t in texts[:max_samples]]
-        try:
-            for r in self._pipeline(texts, batch_size=16):
-                lbl = r["label"].upper()
-                if "POS" in lbl or lbl in ("LABEL_2","5 STARS","4 STARS"):
-                    preds.append(reverse.get("Positive",2))
-                elif "NEG" in lbl or lbl in ("LABEL_0","1 STAR","2 STARS"):
-                    preds.append(reverse.get("Negative",0))
-                else:
-                    preds.append(reverse.get("Neutral",1))
-        except Exception: return None
-        return np.array(preds)
-    def is_available(self): return self._load()
-
-
 def detect_sarcasm_advanced(text: str) -> float:
     return _get_sarcasm_score(text)
 
@@ -257,12 +189,6 @@ def _analyze_data(X: pd.Series, y: pd.Series, df_meta: pd.DataFrame = None) -> d
     if vocab_ratio > 0.3 or avg_len > 20:    complexity = "high"
     elif vocab_ratio > 0.15 or avg_len > 10: complexity = "medium"
     else:                                     complexity = "low"
-
-    gpu_available = False
-    try:
-        import tensorflow as tf
-        gpu_available = len(tf.config.list_physical_devices("GPU")) > 0
-    except Exception: pass
 
     if df_meta is not None and "IsSarcasm" in df_meta.columns:
         sarcasm_ratio = float(df_meta["IsSarcasm"].mean())
@@ -303,7 +229,7 @@ def _analyze_data(X: pd.Series, y: pd.Series, df_meta: pd.DataFrame = None) -> d
     profile = {
         "n_rows": n_rows, "imbalance": round(imbalance, 3),
         "vocab_ratio": round(vocab_ratio, 3), "avg_len": round(avg_len, 1),
-        "complexity": complexity, "gpu_available": gpu_available,
+        "complexity": complexity, "gpu_available": False,   # GPU not used — DL removed
         "sarcasm_ratio": round(sarcasm_ratio, 3),
         "lang_diversity": round(lang_diversity, 3),
         "social_media_score": round(social_media_score, 3),
@@ -311,46 +237,29 @@ def _analyze_data(X: pd.Series, y: pd.Series, df_meta: pd.DataFrame = None) -> d
     print(f"[DATA PROFILE] rows={n_rows} | complexity={complexity} | "
           f"avg_len={profile['avg_len']} | sarcasm={profile['sarcasm_ratio']:.1%} | "
           f"non-english={profile['lang_diversity']:.1%} | "
-          f"social_media={profile['social_media_score']:.1%} | gpu={gpu_available}")
+          f"social_media={profile['social_media_score']:.1%}")
     return profile
 
 
 # ═════════════════════════════════════════════════════════════════════════════
 #  FIX 7 — CANDIDATE TYPE SELECTOR
 # ═════════════════════════════════════════════════════════════════════════════
-def _select_candidate_types(profile: dict, use_dl: bool, use_transformers: bool) -> set:
-    n        = profile["n_rows"]
-    avg_len  = profile["avg_len"]
-    lang_div = profile["lang_diversity"]
-    comp     = profile["complexity"]
+def _select_candidate_types(profile: dict, use_dl: bool = False, use_transformers: bool = False) -> set:
+    """
+    DL and Transformer types removed — always returns Classical ML + NLP/Lexicon.
+    Parameters kept for API compatibility but ignored.
+    """
+    n    = profile["n_rows"]
+    comp = profile["complexity"]
+
+    eligible = {"Classical ML", "NLP/Lexicon"}
 
     if n < 1000:
-        eligible = {"Classical ML", "NLP/Lexicon"}
-        reason   = f"Small dataset ({n} rows). Classical ML + Lexicon eligible."
+        reason = f"Small dataset ({n} rows). Classical ML + Lexicon eligible."
     elif n < 10000:
-        eligible = {"Classical ML", "NLP/Lexicon"}
-        reason   = f"Medium dataset ({n} rows). Classical ML preferred. DL excluded."
-    elif n < 50000:
-        eligible = {"Classical ML", "NLP/Lexicon"}
-        if use_dl and profile["gpu_available"] and avg_len > 15:
-            eligible.add("Deep Learning")
-            reason = f"Large dataset ({n} rows) + GPU + avg_len={avg_len} > 15. DL eligible."
-        elif use_dl and profile["gpu_available"] and avg_len <= 15:
-            reason = f"Large ({n} rows) + GPU but avg_len={avg_len} <= 15. ML preferred."
-        elif use_dl and not profile["gpu_available"]:
-            reason = f"Large ({n} rows) but no GPU. DL excluded."
-        else:
-            reason = f"Large dataset ({n} rows). Classical ML + NLP eligible."
+        reason = f"Medium dataset ({n} rows). Classical ML preferred."
     else:
-        eligible = {"Classical ML", "NLP/Lexicon"}
-        if use_dl: eligible.add("Deep Learning")
-        if use_transformers and lang_div > 0.2:
-            eligible.add("Transformer/BERT")
-            reason = f"Very large ({n} rows) + {lang_div:.0%} non-English. Transformer eligible."
-        elif use_transformers and lang_div <= 0.2:
-            reason = f"Very large ({n} rows) only {lang_div:.0%} non-English. Transformer not justified."
-        else:
-            reason = f"Very large dataset ({n} rows). All types eligible."
+        reason = f"Large dataset ({n} rows). Classical ML + NLP/Lexicon eligible."
 
     comp_notes = {
         "low":    "Low complexity → LR, NB likely to lead.",
@@ -417,7 +326,10 @@ def train_models(X: pd.Series, y: pd.Series,
     df_meta : full preprocessed DataFrame (optional) — provides:
                 IsSarcasm → accurate sarcasm ratio
                 Lang      → accurate language diversity
-                Original  → raw multilingual text for Transformers (FIX 10)
+
+    NOTE: use_dl and use_transformers parameters are kept for API compatibility
+          but are completely ignored — DL and Transformer models are not available.
+          Only Classical ML + VADER + TextBlob models are trained.
     """
     global _vectorizer, _label_encoder, BEST_MODEL_OBJ, BEST_MODEL_NAME, ALL_RESULTS
 
@@ -494,7 +406,7 @@ def train_models(X: pd.Series, y: pd.Series,
         if model_obj is not None:
             fitted[name] = model_obj
 
-    # Classical ML
+    # ── Classical ML ──────────────────────────────────────────────────────────
     for name, clf in _build_classical_models().items():
         try:
             t0 = time.time()
@@ -505,7 +417,7 @@ def train_models(X: pd.Series, y: pd.Series,
             results[name] = {"accuracy":0,"f1":0,"precision":0,"recall":0,
                              "speed_ms":9999,"type":"Classical ML","available":False}
 
-    # VADER
+    # ── VADER ─────────────────────────────────────────────────────────────────
     vader = _VADERModel()
     if vader.is_available():
         try:
@@ -518,7 +430,7 @@ def train_models(X: pd.Series, y: pd.Series,
         results["VADER (NLTK)"] = {"accuracy":0,"f1":0,"precision":0,"recall":0,
                                    "speed_ms":0,"type":"NLP/Lexicon","available":False}
 
-    # TextBlob
+    # ── TextBlob ──────────────────────────────────────────────────────────────
     tb = _TextBlobModel()
     if tb.is_available():
         try:
@@ -531,71 +443,14 @@ def train_models(X: pd.Series, y: pd.Series,
         results["TextBlob"] = {"accuracy":0,"f1":0,"precision":0,"recall":0,
                                "speed_ms":0,"type":"NLP/Lexicon","available":False}
 
-    # Deep Learning
-    if use_dl:
-        try:
-            from tensorflow.keras.preprocessing.text     import Tokenizer
-            from tensorflow.keras.preprocessing.sequence import pad_sequences
-            MAX_LEN, VOCAB, EPOCHS, BATCH = 100, 10000, 3, 32
-            tok = Tokenizer(num_words=VOCAB, oov_token="<OOV>")
-            tok.fit_on_texts(X_tr.tolist())
-            X_tr_s = pad_sequences(tok.texts_to_sequences(X_tr.tolist()), maxlen=MAX_LEN)
-            X_te_s = pad_sequences(tok.texts_to_sequences(X_te.tolist()), maxlen=MAX_LEN)
-            for name, model in _build_dl_models(VOCAB, MAX_LEN, num_classes).items():
-                try:
-                    t0    = time.time()
-                    model.fit(X_tr_s, y_tr, epochs=EPOCHS, batch_size=BATCH,
-                              validation_split=0.1, verbose=0)
-                    preds = np.argmax(model.predict(X_te_s, verbose=0), axis=1)
-                    _record(name, preds, (time.time()-t0)*1000, "Deep Learning")
-                except Exception:
-                    results[name] = {"accuracy":0,"f1":0,"precision":0,"recall":0,
-                                     "speed_ms":9999,"type":"Deep Learning","available":False}
-        except ImportError:
-            for name in ["LSTM","BiLSTM","CNN-Text"]:
-                results[name] = {"accuracy":0,"f1":0,"precision":0,"recall":0,
-                                 "speed_ms":0,"type":"Deep Learning","available":False}
-
-    # FIX 10 — Transformer uses Original multilingual text
-    # BUG FIX — X_te_orig was used but never defined in original code
-    if use_transformers:
-        if df_meta is not None and "Original" in df_meta.columns:
-            X_original = df_meta["Original"].reset_index(drop=True)
-            print(f"[TRANSFORMER] Using Original multilingual text ({len(X_original)} rows).")
-        else:
-            X_original = X
-            print("[TRANSFORMER] df_meta['Original'] not found. Using cleaned English fallback.")
-
-        _, X_te_orig, _, _ = train_test_split(
-            X_original, y_enc, test_size=0.2, random_state=42,
-            stratify=y_enc if do_stratify else None, shuffle=True,
-        )
-
-        for hf_name, display in [
-            ("distilbert-base-uncased-finetuned-sst-2-english", "DistilBERT"),
-            ("albert-base-v2",                                   "ALBERT"),
-            ("nlptown/bert-base-multilingual-uncased-sentiment", "Multilingual BERT"),
-        ]:
-            tm = _TransformerSentiment(hf_name, display)
-            if tm.is_available():
-                try:
-                    t0    = time.time()
-                    preds = tm.predict_bulk(X_te_orig.tolist(), label_map, max_samples=200)
-                    if preds is not None:
-                        _record(display, preds, (time.time()-t0)*1000, "Transformer/BERT")
-                except Exception: pass
-            else:
-                results[display] = {"accuracy":0,"f1":0,"precision":0,"recall":0,
-                                    "speed_ms":0,"type":"Transformer/BERT","available":False}
-
-    # Smart model selection
+    # ── Smart model selection ─────────────────────────────────────────────────
     available = {k:v for k,v in results.items()
                  if v.get("available",False) and v["accuracy"] > 0}
     if not available:
         available = results
 
     profile        = _analyze_data(X, y, df_meta)
-    eligible_types = _select_candidate_types(profile, use_dl, use_transformers)
+    eligible_types = _select_candidate_types(profile)
     penalties      = _compute_lexicon_penalties(profile)
 
     smart_pool = {k:v for k,v in available.items()
@@ -609,8 +464,6 @@ def train_models(X: pd.Series, y: pd.Series,
         typ = smart_pool[k].get("type", "")
         spd = smart_pool[k].get("speed_ms", 9999)
 
-        # Penalty for models known to be poor on sparse text
-        # Does not affect UI accuracy display — selection only
         text_suitability_penalty = 0.0
         if k == "Decision Tree":        text_suitability_penalty = 5.0
         if k == "K-Nearest Neighbours": text_suitability_penalty = 3.0
@@ -662,32 +515,6 @@ def get_detailed_metrics(X: pd.Series, y: pd.Series):
                                    output_dict=True, zero_division=0)
     return cm, report, _label_encoder.classes_
 
-
-"""
-LIVE PROBE — Complete replacement for model.py
-═══════════════════════════════════════════════
-Replace everything from predict_live() to end of file with this.
-
-WHAT IS NEW:
-  ✅ Domain-specific keyword engine for Indian govt schemes
-     (handles indirect negatives, bureaucracy complaints, amount irony)
-  ✅ Multilingual keyword dictionaries — Hindi, Hinglish, Tamil, Bengali
-  ✅ Indirect negative detector:
-     "Applied 3 years ago, still waiting" → Negative (TextBlob says Neutral)
-     "Name disappeared from list" → Negative
-     "Only on paper" → Negative
-  ✅ Amount/quantity irony detector:
-     "₹2000 every 4 months! Wow, luxury villa" → Sarcasm
-     "5 lakh card but hospital 100km away" → Sarcasm
-  ✅ Bureaucracy loop detector:
-     "Apply online then visit office 4 times to verify" → Sarcasm
-  ✅ Raw social media classifier:
-     "bekaar 👎" → Negative | "acha hai 👍" → Positive
-  ✅ 5-way ensemble voting:
-     ML model + TextBlob + VADER + Domain keywords + Sarcasm engine
-  ✅ Sparsity check prevents ML from guessing on unknown vocabulary
-  ✅ Confidence-weighted final decision
-"""
 
 # ═════════════════════════════════════════════════════════════════════════════
 #  DOMAIN KEYWORD ENGINE
@@ -816,7 +643,6 @@ _EMOJI_NEUTRAL  = {"🤔","😐","🙂","😶","💭","🤷"}
 
 # ═════════════════════════════════════════════════════════════════════════════
 #  DOMAIN KEYWORD SCORER
-#  Returns (sentiment, confidence, reason) from domain knowledge alone
 # ═════════════════════════════════════════════════════════════════════════════
 def _domain_score(text: str) -> dict:
     """
@@ -899,44 +725,33 @@ def _domain_score(text: str) -> dict:
                     break
 
     # ── Indirect negative patterns ────────────────────────────────────────────
-    # These are the hardest cases — sentiment is implied not stated directly
-    # "Applied 3 years ago, still waiting" → clearly Negative
-    # TextBlob reads this as Neutral because no negative polarity words
-
-    # Waiting + time pattern
     import re
     if re.search(r"\b(applied|waiting|pending)\b.{0,60}\b(year|month|ago|since)\b", tl):
         neg_score += 0.35
         reasons.append("indirect_neg:waiting_time")
 
-    # "only on paper" / "only in news" / "only in ads"
     if re.search(r"\bonly\s+(on\s+paper|in\s+news|in\s+ads|announcements?|for\s+show)\b", tl):
         neg_score += 0.4
         reasons.append("indirect_neg:only_on_paper")
 
-    # "nothing [has] changed"
     if re.search(r"\bnothing\s+(has\s+)?(changed|happened|improved|worked)\b", tl):
         neg_score += 0.4
         reasons.append("indirect_neg:nothing_changed")
 
-    # "name [was/got] removed/disappeared"
     if re.search(r"\bname\b.{0,30}\b(removed|disappeared|deleted|missing|hata|gaya)\b", tl):
         neg_score += 0.4
         reasons.append("indirect_neg:name_removed")
 
-    # "still [no/same/waiting/pending]"
     if re.search(r"\bstill\s+(no\s+\w+|waiting|pending|same|stuck|facing|nothing)\b", tl):
         neg_score += 0.3
         reasons.append("indirect_neg:still_no")
 
     # ── Amount irony detection ────────────────────────────────────────────────
-    # "₹2000 every 4 months" + exaggerated claim = sarcasm
     if re.search(r"(₹|rs\.?|rupee)\s*\d+", tl):
         if re.search(r"\b(retire|villa|luxury|rich|wealthy|afford|king|queen)\b", tl):
             sarc_score += 0.5
             reasons.append("amount_irony:tiny_amount_big_claim")
 
-    # "5 lakh card but [problem]" = sarcasm
     if re.search(r"\b\d+\s*lakh\b.{0,60}\b(but|however|except|still|yet)\b", tl):
         sarc_score += 0.3
         reasons.append("amount_irony:lakh_card_but_problem")
@@ -947,13 +762,11 @@ def _domain_score(text: str) -> dict:
         reasons.append("sarc_pattern:i_love_how")
 
     # ── Exclamation + downgrade pattern ──────────────────────────────────────
-    # "Amazing! Still same problems" / "Great! Nothing changed"
     if re.search(r"(amazing|great|wonderful|fantastic|brilliant)[!.]+.{0,80}(still|same|nothing|zero|no\s)", tl):
         sarc_score += 0.4
         reasons.append("sarc_pattern:praise_then_problem")
 
     # ── Raw social media short text ───────────────────────────────────────────
-    # Very short texts that rely entirely on keywords/emojis
     word_count = len(text.split())
     if word_count <= 5:
         if any(w in tl for w in ["bekaar","bekar","bakwaas","useless","terrible","worst"]):
@@ -978,15 +791,15 @@ def _domain_score(text: str) -> dict:
 #  Combines: ML model + TextBlob + VADER + Domain keywords + Sarcasm engine
 # ═════════════════════════════════════════════════════════════════════════════
 def _ensemble_vote(
-    ml_label: str | None,
+    ml_label,
     ml_conf: float,
-    tb_label: str | None,
-    vader_label: str | None,
+    tb_label,
+    vader_label,
     domain: dict,
     sarc_score: float,
-    hindi_prior: str | None,
+    hindi_prior,
     lang: str,
-) -> tuple[str, float, str]:
+):
     """
     Combines all signals into final sentiment + confidence + model_used.
 
@@ -1005,13 +818,11 @@ def _ensemble_vote(
     agents = []
 
     # ── Domain keyword vote ───────────────────────────────────────────────────
-    # Highest weight — domain-specific, handles indirect negatives
     d_scores = {
         "Positive": domain["pos_score"],
         "Negative": domain["neg_score"],
         "Neutral":  domain["neu_score"],
     }
-    # Sarcasm → treat as Negative for voting purposes
     if domain["sarc_score"] > 0.45:
         d_scores["Negative"] = max(d_scores["Negative"], domain["sarc_score"])
 
@@ -1051,14 +862,9 @@ def _ensemble_vote(
     total_score = sum(votes.values())
     win_score   = votes[winner]
     confidence  = min((win_score / max(total_score, 0.01)) * 100, 97.0)
-
-    # Minimum confidence floor
     confidence  = max(confidence, 52.0)
 
-    # ── Sarcasm override ──────────────────────────────────────────────────────
-    # If sarcasm engine is confident AND winning sentiment is Positive
-    # flip to Negative — sarcastic positives are actually negative
-    model_used = " + ".join(agents[:4])  # show top 4 agents
+    model_used = " + ".join(agents[:4])
     if sarc_score > 0.45 and winner == "Positive":
         winner     = "Negative"
         confidence = max(confidence, 70.0)
@@ -1070,7 +876,7 @@ def _ensemble_vote(
 # ═════════════════════════════════════════════════════════════════════════════
 #  TEXTBLOB + VADER STANDALONE PREDICTORS
 # ═════════════════════════════════════════════════════════════════════════════
-def _get_textblob_label(text: str) -> str | None:
+def _get_textblob_label(text: str):
     try:
         from textblob import TextBlob
         pol = TextBlob(str(text)).sentiment.polarity
@@ -1081,7 +887,7 @@ def _get_textblob_label(text: str) -> str | None:
         return None
 
 
-def _get_vader_label(text: str) -> str | None:
+def _get_vader_label(text: str):
     try:
         import nltk
         try:    nltk.data.find("sentiment/vader_lexicon.zip")
@@ -1132,7 +938,6 @@ def predict_live_with_confidence(text: str, cleaned_text: str = None) -> dict:
     translated = _translate(text, lang) if lang != "en" else text
 
     # ── Step 3: Sarcasm score on ORIGINAL text ────────────────────────────────
-    # Must run on original — sarcasm emojis and Hindi phrases are in original
     sc           = _get_sarcasm_score(text)
     is_sarcastic = sc > 0.45
 
@@ -1145,8 +950,6 @@ def predict_live_with_confidence(text: str, cleaned_text: str = None) -> dict:
             c_text = translated[:200]
 
     # ── Step 5: Domain keyword scoring ────────────────────────────────────────
-    # Run on ORIGINAL text (captures Hindi/Hinglish keywords)
-    # Also run on translated text and take the stronger signal
     domain_orig  = _domain_score(text)
     domain_trans = _domain_score(translated)
     domain = {
@@ -1172,22 +975,17 @@ def predict_live_with_confidence(text: str, cleaned_text: str = None) -> dict:
             label    = _label_encoder.inverse_transform([pred])[0]
             conf     = float(max(proba)) * 100
 
-            # Sparsity guard — if fewer than 3 features matched,
-            # TF-IDF vector is near-empty → ML is guessing → exclude from vote
             if non_zero >= 3 and conf >= 45.0:
                 ml_label = label
                 ml_conf  = conf
                 ml_name  = BEST_MODEL_NAME or "ML Model"
-            # else: ml_label stays None → excluded from ensemble vote
         except Exception:
             pass
 
-    # ── Step 7: TextBlob prediction on translated text ────────────────────────
+    # ── Step 7: TextBlob prediction ───────────────────────────────────────────
     tb_label = _get_textblob_label(translated)
 
-    # ── Step 8: VADER prediction on translated text ───────────────────────────
-    # VADER specifically benefits from sarcasm markers preserved
-    # through translation (FIX 5 in preprocess.py)
+    # ── Step 8: VADER prediction ──────────────────────────────────────────────
     vader_label = _get_vader_label(translated)
 
     # ── Step 9: 5-way ensemble vote ───────────────────────────────────────────
