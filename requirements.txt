@@ -17,3 +17,5 @@ lxml
 google-api-python-client
 newsapi-python
 supabase
+tensorflow
+transformers
