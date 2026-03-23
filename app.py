@@ -24,22 +24,49 @@ import plotly.graph_objects as go
 
 from modules.preprocess  import preprocess_dataframe, detect_language, translate_to_english, detect_sarcasm, clean_text, get_sentiment
 from modules.model       import train_models, get_detailed_metrics, predict_live, predict_live_with_confidence, detect_sarcasm_advanced
-from modules.scraper     import ALL_SCHEMES, fetch_all          # ← fetch_instagram_post removed
+from modules.scraper     import ALL_SCHEMES, fetch_all
 from auth.auth_manager   import login, signup, get_google_auth_url
 
+# ── Storage layer (works locally via CSV and deployed via Supabase) ───────────
+try:
+    from data.storage import load_data as _storage_load_data, get_stats as _storage_get_stats, _is_deployed
+except ImportError:
+    def _storage_load_data():
+        try:    return pd.read_csv("data/data.csv")
+        except: return pd.DataFrame()
+    def _storage_get_stats(): return {"total_rows": 0}
+    def _is_deployed():       return False
+
 # ── Cache helpers ─────────────────────────────────────────────────────────────
+def _get_data_hash() -> str:
+    """
+    Hash that changes whenever data changes.
+    Deployed (Supabase): uses row count + a time bucket so stale cache is
+                         busted after the first minute following a fetch.
+    Local: uses data/data.csv mtime.
+    """
+    try:
+        if _is_deployed():
+            import time
+            stats = _storage_get_stats()
+            bucket = str(int(time.time() // 60))
+            return f"{stats.get('total_rows', 0)}-{bucket}"
+        else:
+            return str(os.path.getmtime("data/data.csv"))
+    except Exception:
+        return "0"
+
 @st.cache_data(show_spinner=False)
-def _cached_preprocess(csv_hash: str, scheme: str):
-    df_raw = pd.read_csv("data/data.csv")
+def _cached_preprocess(data_hash: str, scheme: str):
+    """Load from storage (Supabase or CSV) then preprocess."""
+    df_raw = _storage_load_data()
+    if df_raw is None or df_raw.empty:
+        return pd.DataFrame()
     if scheme != "All Schemes":
         key   = scheme.split("—")[0].strip().split(" ")[0]
         df_f  = df_raw[df_raw["Scheme"].str.contains(key, case=False, na=False)]
         df_raw = df_f if len(df_f) >= 10 else df_raw
     return preprocess_dataframe(df_raw)
-
-def _get_csv_hash() -> str:
-    try:    return str(os.path.getmtime("data/data.csv"))
-    except: return "0"
 
 # ── Config ────────────────────────────────────────────────────────────────────
 st.set_page_config(page_title="Pulse · Sentiment AI", page_icon="🧠",
@@ -55,13 +82,19 @@ GOOGLE_CLIENT_SECRET = _get_secret("GOOGLE_CLIENT_SECRET")
 def _get_redirect_uri() -> str:
     try:
         cloud_url = st.secrets.get("REDIRECT_URI", "")
-        if cloud_url:
-            return cloud_url
+        if cloud_url: return cloud_url
     except Exception:
         pass
     return os.getenv("REDIRECT_URI", "http://localhost:8501")
 
 REDIRECT_URI = _get_redirect_uri()
+
+# All valid source names — must match scraper.py exactly
+VALID_SOURCES = {
+    "YouTube", "News App", "Google News",
+    "Dainik Bhaskar", "Amar Ujala", "Navbharat Times",
+    "Jagran", "NDTV Hindi", "ABP Live",
+}
 
 SCHEME_EMOJI = {
     "PMAY — Pradhan Mantri Awas Yojana":"🏘️","Ayushman Bharat — PM-JAY":"🏥",
@@ -380,7 +413,7 @@ div[data-testid="column"]:first-child .stButton > button:hover {
 for k, v in [("logged_in",False),("user_info",{}),("auth_mode","login"),
               ("analysis_done",False),("df_store",None),
               ("results_store",None),("best_name_store",None),("metrics_store",None),
-              ("used_dl",False),("used_tr",False)]:
+              ("used_dl",False),("used_tr",False),("fetch_done",False)]:
     if k not in st.session_state: st.session_state[k] = v
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -560,6 +593,18 @@ else:
     #  TAB 1 — ANALYSIS
     # ══════════════════════════════════════════════════════════════════════════
     with t1:
+        # Banner when new data was fetched and analysis is stale
+        if st.session_state.get("fetch_done"):
+            st.markdown("""
+            <div style="background:rgba(251,191,36,0.08);border:1px solid rgba(251,191,36,0.28);
+                 border-radius:10px;padding:12px 18px;margin-bottom:14px;display:flex;
+                 align-items:center;gap:10px;">
+              <span style="font-size:16px;">🔄</span>
+              <span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#fbbf24;letter-spacing:1.5px;">
+                NEW DATA FETCHED — Click <b>Run Analysis →</b> to include it in charts and models.
+              </span>
+            </div>""", unsafe_allow_html=True)
+
         st.markdown("<div class='card'>", unsafe_allow_html=True)
         st.markdown("<div class='label'>Select Scheme</div>", unsafe_allow_html=True)
 
@@ -578,23 +623,28 @@ else:
         st.markdown("</div>", unsafe_allow_html=True)
 
         if run:
-            try:
-                pd.read_csv("data/data.csv")
-            except FileNotFoundError:
-                st.error("Dataset not found. Run: python data/generate_data.py")
+            # Clear all caches so fresh data is loaded from storage
+            st.cache_data.clear()
+            st.cache_resource.clear()
+
+            raw_check = _storage_load_data()
+            if raw_check is None or raw_check.empty:
+                st.error("Dataset not found. Run: python data/generate_data.py  (or fetch data from the Data tab)")
                 st.stop()
 
+            data_hash = _get_data_hash()
+
             with st.spinner("Step 1 / 2 — Preprocessing & labelling…"):
-                df = _cached_preprocess(_get_csv_hash(), scheme)
+                df = _cached_preprocess(data_hash, scheme)
 
             @st.cache_resource
-            def _cached_train(cleaned_hash, scheme, use_dl, use_tr):
-                df = _cached_preprocess(_get_csv_hash(), scheme)
-                return train_models(df["Cleaned"], df["Sentiment"],
-                        use_dl=use_dl, use_transformers=use_tr, df_meta=df)
+            def _cached_train(data_hash, scheme, use_dl, use_tr):
+                df_inner = _cached_preprocess(data_hash, scheme)
+                return train_models(df_inner["Cleaned"], df_inner["Sentiment"],
+                        use_dl=use_dl, use_transformers=use_tr, df_meta=df_inner)
 
             with st.spinner("Step 2 / 2 — Training & benchmarking all models…"):
-                results, best_name = _cached_train(_get_csv_hash(), scheme, use_dl, use_tr)
+                results, best_name = _cached_train(data_hash, scheme, use_dl, use_tr)
             metrics = results
 
             st.session_state.df_store        = df
@@ -604,6 +654,7 @@ else:
             st.session_state.analysis_done   = True
             st.session_state.used_dl         = use_dl
             st.session_state.used_tr         = use_tr
+            st.session_state.fetch_done      = False   # banner consumed
 
         if st.session_state.analysis_done and st.session_state.df_store is not None:
             df        = st.session_state.df_store
@@ -647,25 +698,18 @@ else:
                 st.markdown("<div class='card'>", unsafe_allow_html=True)
                 st.markdown("<div class='label'>By Platform</div>", unsafe_allow_html=True)
                 if "Source" in df.columns:
-                    # ── Filter to current 4 sources only ──────────────────────
-                    # Excludes old Twitter/Instagram rows still in data.csv
-                    valid_sources = {
-                        "YouTube", "News App", "Google News",
-                        # Individual Hindi newspaper names from scraper.py
-                        "Dainik Bhaskar", "Amar Ujala", "Navbharat Times",
-                        "Jagran", "NDTV Hindi", "ABP Live",
-                    }
-                    df_plot = df[df["Source"].isin(valid_sources)]
-                    if len(df_plot) == 0:
-                        df_plot = df  # fallback if new data not yet fetched
+                    # Show every valid source that is actually present — no silent fallback
+                    df_plot = df[df["Source"].isin(VALID_SOURCES)].copy()
+                    if df_plot.empty:
+                        df_plot = df.copy()
                     ss = df_plot.groupby(["Source","Sentiment"]).size().reset_index(name="Count")
                     fig_bar = px.bar(ss, x="Source", y="Count", color="Sentiment", barmode="group",
                         color_discrete_map={"Positive":"#34d399","Negative":"#fb7185","Neutral":"#fbbf24","Sarcasm":"#a78bfa"})
                     fig_bar.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
                         font_color="#8fa8c8", legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color="#8fa8c8")),
-                        xaxis=dict(gridcolor="rgba(56,189,248,0.06)", color="#4a6380"),
+                        xaxis=dict(gridcolor="rgba(56,189,248,0.06)", color="#4a6380", tickangle=-30),
                         yaxis=dict(gridcolor="rgba(56,189,248,0.06)", color="#4a6380"),
-                        margin=dict(t=10,b=10,l=10,r=10), height=300)
+                        margin=dict(t=10,b=60,l=10,r=10), height=320)
                     st.plotly_chart(fig_bar, use_container_width=True, key="fig_bar")
                 st.markdown("</div>", unsafe_allow_html=True)
 
@@ -702,32 +746,28 @@ else:
                 st.plotly_chart(fig_sar, use_container_width=True, key="fig_sar")
                 st.markdown("</div>", unsafe_allow_html=True)
 
-            if "Source" in df.columns and df["Source"].nunique() > 1:
-                st.markdown("<div class='card'>", unsafe_allow_html=True)
-                st.markdown("<div class='label'>Platform × Sentiment Heatmap</div>", unsafe_allow_html=True)
-                # Only show current 4 platforms in heatmap
-                valid_sources = {
-                    "YouTube", "News App", "Google News",
-                    # Individual Hindi newspaper names from scraper.py
-                    "Dainik Bhaskar", "Amar Ujala", "Navbharat Times",
-                    "Jagran", "NDTV Hindi", "ABP Live",
-                }
-                df_heat = df[df["Source"].isin(valid_sources)]
-                if len(df_heat) == 0:
-                    df_heat = df
-                srcs  = df_heat["Source"].unique().tolist()
-                sents = ["Positive","Negative","Neutral"]
-                z, t  = [], []
-                for s in srcs:
-                    sub = df_heat[df_heat["Source"]==s]["Sentiment"].value_counts(normalize=True).mul(100)
-                    row = [round(sub.get(x,0),1) for x in sents]
-                    z.append(row); t.append([f"{v}%" for v in row])
-                fig_heat = go.Figure(go.Heatmap(z=z, x=sents, y=srcs, text=t, texttemplate="%{text}",
-                    colorscale=[[0,"#080c14"],[0.4,"#0ea5e9"],[1,"#34d399"]], showscale=True))
-                fig_heat.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                    font_color="#8fa8c8", margin=dict(t=10,b=10,l=10,r=10), height=280)
-                st.plotly_chart(fig_heat, use_container_width=True, key="fig_heat")
-                st.markdown("</div>", unsafe_allow_html=True)
+            # Platform × Sentiment Heatmap — all sources in analysed df
+            if "Source" in df.columns:
+                df_heat = df[df["Source"].isin(VALID_SOURCES)].copy()
+                if df_heat.empty:
+                    df_heat = df.copy()
+                if df_heat["Source"].nunique() >= 1:
+                    st.markdown("<div class='card'>", unsafe_allow_html=True)
+                    st.markdown("<div class='label'>Platform × Sentiment Heatmap</div>", unsafe_allow_html=True)
+                    srcs  = sorted(df_heat["Source"].unique().tolist())
+                    sents = ["Positive","Negative","Neutral"]
+                    z, t  = [], []
+                    for s in srcs:
+                        sub = df_heat[df_heat["Source"]==s]["Sentiment"].value_counts(normalize=True).mul(100)
+                        row = [round(sub.get(x,0),1) for x in sents]
+                        z.append(row); t.append([f"{v}%" for v in row])
+                    fig_heat = go.Figure(go.Heatmap(z=z, x=sents, y=srcs, text=t, texttemplate="%{text}",
+                        colorscale=[[0,"#080c14"],[0.4,"#0ea5e9"],[1,"#34d399"]], showscale=True))
+                    fig_heat.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                        font_color="#8fa8c8", margin=dict(t=10,b=10,l=10,r=10),
+                        height=max(280, 50 * len(srcs) + 60))
+                    st.plotly_chart(fig_heat, use_container_width=True, key="fig_heat")
+                    st.markdown("</div>", unsafe_allow_html=True)
 
             # ── Model Benchmarks ──────────────────────────────────────────────
             st.markdown("<div class='card'>", unsafe_allow_html=True)
@@ -809,10 +849,20 @@ else:
                 st.plotly_chart(fig_cmp, use_container_width=True, key="fig_cmp")
             st.markdown("</div>", unsafe_allow_html=True)
 
+            # Dataset preview — sorted so all sources appear, not just the first 50 rows
             st.markdown("<div class='card'>", unsafe_allow_html=True)
             st.markdown("<div class='label'>Dataset Preview</div>", unsafe_allow_html=True)
             show = [c for c in ["Scheme","Source","Lang","Comment","Translated","IsSarcasm","Sentiment"] if c in df.columns]
-            st.dataframe(df[show].head(50), use_container_width=True, height=300)
+            df_preview = df[show].copy()
+            if "Source" in df_preview.columns:
+                df_preview = df_preview.sort_values("Source").reset_index(drop=True)
+            st.dataframe(df_preview.head(100), use_container_width=True, height=320)
+            # Source distribution summary
+            if "Source" in df.columns:
+                src_counts = df["Source"].value_counts().reset_index()
+                src_counts.columns = ["Source","Rows"]
+                src_counts["% of total"] = (src_counts["Rows"] / len(df) * 100).round(1).astype(str) + "%"
+                st.dataframe(src_counts, use_container_width=True, hide_index=True)
             st.markdown("</div>", unsafe_allow_html=True)
 
         elif not st.session_state.analysis_done:
@@ -950,7 +1000,6 @@ else:
         st.markdown("<div class='card'>", unsafe_allow_html=True)
         st.markdown("<div class='label'>Cross-Platform Sentiment Comparison</div>", unsafe_allow_html=True)
 
-        # ── Source info box ───────────────────────────────────────────────────
         st.markdown("""
         <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:18px;">
           <div style="background:rgba(56,189,248,0.07);border:1px solid rgba(56,189,248,0.2);border-radius:8px;padding:8px 14px;font-family:'IBM Plex Mono',monospace;font-size:9px;color:#38bdf8;letter-spacing:1.5px;">▶ YouTube — Official API</div>
@@ -965,21 +1014,19 @@ else:
         if st.session_state.df_store is not None:
             df = st.session_state.df_store
 
-            # All current valid sources — matches scraper.py source names exactly
-            valid_sources = {
-                "YouTube", "News App", "Google News",
-                "Dainik Bhaskar", "Amar Ujala", "Navbharat Times",
-                "Jagran", "NDTV Hindi", "ABP Live",
-            }
-            df_plat = df[df["Source"].isin(valid_sources)]
-            if len(df_plat) == 0:
-                df_plat = df  # fallback
+            df_plat = df[df["Source"].isin(VALID_SOURCES)].copy()
+            if df_plat.empty:
+                df_plat = df.copy()
 
-            if "Source" in df_plat.columns and df_plat["Source"].nunique() > 1:
-                ps = df_plat.groupby("Source")["Sentiment"].value_counts(normalize=True).mul(100).round(1).unstack(fill_value=0).reset_index()
+            if "Source" in df_plat.columns and df_plat["Source"].nunique() >= 1:
+                # Percentage breakdown table
+                ps = (df_plat.groupby("Source")["Sentiment"]
+                      .value_counts(normalize=True).mul(100).round(1)
+                      .unstack(fill_value=0).reset_index())
                 st.dataframe(ps, use_container_width=True, hide_index=True)
 
-                srcs  = df_plat["Source"].unique().tolist()
+                # Heatmap — auto-height scales to number of sources
+                srcs  = sorted(df_plat["Source"].unique().tolist())
                 sents = ["Positive","Negative","Neutral"]
                 z, t  = [], []
                 for s in srcs:
@@ -989,20 +1036,36 @@ else:
                 fh = go.Figure(go.Heatmap(z=z, x=sents, y=srcs, text=t, texttemplate="%{text}",
                     colorscale=[[0,"#080c14"],[0.4,"#0ea5e9"],[1,"#34d399"]], showscale=True))
                 fh.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                    font_color="#8fa8c8", margin=dict(t=10,b=10,l=10,r=10), height=300)
+                    font_color="#8fa8c8", margin=dict(t=10,b=10,l=10,r=10),
+                    height=max(300, 50 * len(srcs) + 80))
                 st.plotly_chart(fh, use_container_width=True, key="fig_plat_heat")
 
+                # Grouped bar chart — all sources
                 ss2 = df_plat.groupby(["Source","Sentiment"]).size().reset_index(name="Count")
                 fs  = px.bar(ss2, x="Source", y="Count", color="Sentiment", barmode="group",
                     color_discrete_map={"Positive":"#34d399","Negative":"#fb7185","Neutral":"#fbbf24","Sarcasm":"#a78bfa"})
                 fs.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
                     font_color="#8fa8c8", legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color="#8fa8c8")),
-                    xaxis=dict(gridcolor="rgba(56,189,248,0.06)", color="#4a6380"),
+                    xaxis=dict(gridcolor="rgba(56,189,248,0.06)", color="#4a6380", tickangle=-30),
                     yaxis=dict(gridcolor="rgba(56,189,248,0.06)", color="#4a6380"),
-                    margin=dict(t=10,b=10,l=10,r=10), height=300)
+                    margin=dict(t=10,b=60,l=10,r=10), height=320)
                 st.plotly_chart(fs, use_container_width=True, key="fig_src")
+
+                # Row count per source
+                st.markdown("<div class='label' style='margin-top:18px;'>Source Row Count</div>", unsafe_allow_html=True)
+                src_cnt = df_plat["Source"].value_counts().reset_index()
+                src_cnt.columns = ["Source","Rows"]
+                fc = px.bar(src_cnt, x="Source", y="Rows",
+                    color_discrete_sequence=["#38bdf8"],
+                    labels={"Source":"","Rows":"Rows"})
+                fc.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                    font_color="#8fa8c8", showlegend=False,
+                    xaxis=dict(showgrid=False, color="#4a6380", tickangle=-30),
+                    yaxis=dict(showgrid=False, color="#4a6380"),
+                    margin=dict(t=10,b=60,l=5,r=5), height=200)
+                st.plotly_chart(fc, use_container_width=True, key="fig_src_cnt")
             else:
-                st.info("Run analysis first — or fetch data from at least 2 sources to see platform comparison.")
+                st.info("Run analysis first — or fetch data from at least one source to see platform comparison.")
         else:
             st.info("Run analysis first to see platform comparison.")
         st.markdown("</div>", unsafe_allow_html=True)
@@ -1014,7 +1077,6 @@ else:
         st.markdown("<div class='card'>", unsafe_allow_html=True)
         st.markdown("<div class='label'>Fetch Live Data</div>", unsafe_allow_html=True)
 
-        # ── Source info ───────────────────────────────────────────────────────
         st.markdown("""
         <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:10px;margin-bottom:18px;">
           <div style="background:var(--bg3);border:1px solid var(--border2);border-radius:8px;padding:12px;text-align:center;">
@@ -1056,27 +1118,19 @@ else:
                     "padding:14px 18px;font-family:IBM Plex Mono,monospace;font-size:11px;color:#8fa8c8;"
                     "line-height:1.9;max-height:180px;overflow-y:auto;'>"
                     + "<br>".join(f"› {x}" for x in ll[-10:]) + "</div>", unsafe_allow_html=True)
+
             with st.spinner("Fetching from YouTube, NewsAPI, Google News RSS, Hindi News RSS…"):
                 cnts = fetch_all(scheme="All" if "All" in fs else fs,
                                  max_per_source=int(mx), progress_callback=_lg)
 
             tot = sum(cnts.values())
 
-            # ── Show source metric cards dynamically ──────────────────────────
-            # cnts has 4 keys: YouTube, News App, Google News, Hindi News
             source_icons = {
-                "YouTube":        "📺",
-                "News App":       "📰",
-                "Google News":    "🌐",
-                "Hindi News":     "🗞️",
-                "Dainik Bhaskar": "🗞️",
-                "Amar Ujala":     "🗞️",
-                "Navbharat Times":"🗞️",
-                "Jagran":         "🗞️",
-                "NDTV Hindi":     "🗞️",
-                "ABP Live":       "🗞️",
+                "YouTube":"📺","News App":"📰","Google News":"🌐",
+                "Hindi News":"🗞️","Dainik Bhaskar":"🗞️","Amar Ujala":"🗞️",
+                "Navbharat Times":"🗞️","Jagran":"🗞️","NDTV Hindi":"🗞️","ABP Live":"🗞️",
             }
-            cols = st.columns(len(cnts))
+            cols = st.columns(max(len(cnts), 1))
             for col, (src, cnt) in zip(cols, cnts.items()):
                 icon = source_icons.get(src, "📡")
                 col.markdown(f"""<div class="mcard" style="margin-top:10px;">
@@ -1086,77 +1140,73 @@ else:
                 </div>""", unsafe_allow_html=True)
 
             if tot > 0:
-                st.success(f"✓ {tot} total items fetched across all sources.")
+                # ── KEY FIX: bust all caches and mark analysis stale ──────────
+                st.cache_data.clear()
+                st.cache_resource.clear()
+                st.session_state.analysis_done   = False
+                st.session_state.df_store        = None
+                st.session_state.results_store   = None
+                st.session_state.best_name_store = None
+                st.session_state.metrics_store   = None
+                st.session_state.fetch_done      = True
+                st.success(f"✓ {tot} total items fetched and saved. Go to the Analysis tab and click Run Analysis → to include new data.")
             else:
                 st.warning("No data fetched — check YOUTUBE_API_KEY and NEWS_API_KEY in secrets/env. Google News RSS and Hindi News RSS require no keys.")
 
         st.markdown("</div>", unsafe_allow_html=True)
 
-        # ── Dataset Status ────────────────────────────────────────────────────
+        # ── Dataset Status — reads LIVE from storage every time ───────────────
         st.markdown("<div class='card'>", unsafe_allow_html=True)
         st.markdown("<div class='label'>Dataset Status</div>", unsafe_allow_html=True)
 
         try:
-            ds = pd.read_csv("data/data.csv")
+            ds = _storage_load_data()   # always fresh — no cache here
 
-            # ── Why schemes may show more than 40 ─────────────────────────────
-            # generate_data.py uses short names ("PMAY", "PM Kisan")
-            # scraper.py uses full names ("PMAY — Pradhan Mantri Awas Yojana")
-            # Both end up in data.csv = more unique scheme values than 40
-            # Solution: shows only count of rows from known full-name schemes
-            known_schemes  = set(ALL_SCHEMES)
-            known_rows     = ds[ds["Scheme"].isin(known_schemes)]
-            unknown_scheme_count = ds["Scheme"].nunique() - len(known_schemes & set(ds["Scheme"].unique()))
+            if ds is None or ds.empty:
+                st.info("No dataset found. Run: python data/generate_data.py  (or fetch data above)")
+            else:
+                old_sources = set(ds["Source"].unique()) - VALID_SOURCES if "Source" in ds.columns else set()
+                active_src_count = len(VALID_SOURCES & set(ds["Source"].unique())) if "Source" in ds.columns else 0
+                lang_count = ds["Language"].nunique() if "Language" in ds.columns else "—"
 
-            # All valid sources — must match source names used in scraper.py exactly
-            valid_sources    = {
-                "YouTube", "News App", "Google News",
-                "Dainik Bhaskar", "Amar Ujala", "Navbharat Times",
-                "Jagran", "NDTV Hindi", "ABP Live",
-            }
-            current_src_rows = ds[ds["Source"].isin(valid_sources)]
+                d1, d2, d3, d4 = st.columns(4)
+                for col, (v, l, c) in zip([d1,d2,d3,d4],[
+                    (len(ds),               "Total Rows",    "#38bdf8"),
+                    (ds["Scheme"].nunique(), "Scheme Values", "#34d399"),
+                    (active_src_count,      "Active Sources","#a78bfa"),
+                    (lang_count,            "Languages",     "#fbbf24"),
+                ]):
+                    col.markdown(f"""<div class="mcard">
+                        <div class="mval" style="font-size:26px;">{v}</div>
+                        <div class="mlbl">{l}</div>
+                    </div>""", unsafe_allow_html=True)
 
-            d1, d2, d3, d4 = st.columns(4)
-            for col, (v, l, c) in zip([d1,d2,d3,d4],[
-                (len(ds),                               "Total Rows",    "#38bdf8"),
-                (ds["Scheme"].nunique(),                "Scheme Values", "#34d399"),
-                (len(valid_sources & set(ds["Source"].unique())), "Active Sources","#a78bfa"),
-                (ds["Language"].nunique() if "Language" in ds.columns else "—", "Languages", "#fbbf24"),
-            ]):
-                col.markdown(f"""<div class="mcard">
-                    <div class="mval" style="font-size:26px;">{v}</div>
-                    <div class="mlbl">{l}</div>
-                </div>""", unsafe_allow_html=True)
+                if ds["Scheme"].nunique() > 40:
+                    st.info(f"ℹ️ Scheme count shows {ds['Scheme'].nunique()} because data.csv contains both short names (from generate_data.py) and full names (from scraper.py). Run data/fix_data.py to normalise.")
 
-            # Explain scheme count if more than 40
-            if ds["Scheme"].nunique() > 40:
-                st.info(f"ℹ️ Scheme count shows {ds['Scheme'].nunique()} because your data.csv contains both short names (from generate_data.py) and full names (from scraper.py). Run data/fix_data.py to clean this up.")
+                if old_sources:
+                    st.info(f"ℹ️ Legacy source(s) still in dataset: {', '.join(sorted(old_sources))}. Run data/fix_data.py to remove them.")
 
-            # Explain source count if unexpected sources exist
-            old_sources = set(ds["Source"].unique()) - valid_sources
-            if old_sources:
-                st.info(f"ℹ️ Your data.csv still contains old source(s): {', '.join(sorted(old_sources))}. Run data/fix_data.py to remove them.")
+                # Source distribution chart — current sources highlighted
+                if "Source" in ds.columns:
+                    sc2 = ds["Source"].value_counts().reset_index()
+                    sc2.columns = ["Source", "Count"]
+                    sc2["Status"] = sc2["Source"].apply(
+                        lambda x: "Current" if x in VALID_SOURCES else "Legacy"
+                    )
+                    fs2 = px.bar(sc2, x="Source", y="Count", color="Status",
+                        color_discrete_map={"Current":"#38bdf8","Legacy":"#2a3a50"},
+                        labels={"Source":"","Count":"Count","Status":"Status"})
+                    fs2.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                        font_color="#8fa8c8",
+                        legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color="#8fa8c8")),
+                        xaxis=dict(showgrid=False, color="#4a6380", tickangle=-30),
+                        yaxis=dict(showgrid=False, color="#4a6380"),
+                        margin=dict(t=10,b=70,l=5,r=5), height=220)
+                    st.plotly_chart(fs2, use_container_width=True, key="fig_ds_src")
 
-            # Source chart — fixed plotly error by using DataFrame not Series
-            sc2 = ds["Source"].value_counts().reset_index()
-            sc2.columns = ["Source", "Count"]
-            sc2["Status"] = sc2["Source"].apply(
-                lambda x: "Current" if x in valid_sources else "Legacy"
-            )
-            fs2 = px.bar(
-                sc2, x="Source", y="Count", color="Status",
-                color_discrete_map={"Current":"#38bdf8","Legacy":"#2a3a50"},
-                labels={"Source":"","Count":"Count","Status":"Status"},
-            )
-            fs2.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                font_color="#8fa8c8", legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color="#8fa8c8")),
-                xaxis=dict(showgrid=False, color="#4a6380"),
-                yaxis=dict(showgrid=False, showticklabels=False),
-                margin=dict(t=10,b=10,l=5,r=5), height=160)
-            st.plotly_chart(fs2, use_container_width=True, key="fig_ds_src")
-
-        except FileNotFoundError:
-            st.info("No dataset found. Run: python data/generate_data.py")
+        except Exception as e:
+            st.error(f"Could not load dataset: {e}")
 
         st.markdown("</div>", unsafe_allow_html=True)
 
