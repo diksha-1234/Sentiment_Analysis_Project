@@ -1210,7 +1210,7 @@ else:                                                          # ← 0 spaces
                 for Indian Government Schemes Using Adaptive Model Selection
             </div>
             <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:#4a6380;letter-spacing:1.5px;">
-                ML · DL · NLP · Transformers &nbsp;·&nbsp; 5 Research Gaps Addressed
+                ML · NLP  &nbsp;·&nbsp; 5 Research Gaps Addressed
             </div>
         </div>""", unsafe_allow_html=True)
 
