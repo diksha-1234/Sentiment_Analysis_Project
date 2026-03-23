@@ -587,7 +587,13 @@ else:
 
     st.markdown("<div class='div'></div>", unsafe_allow_html=True)
 
-    t1, t2, t3, t4, t5 = st.tabs(["Analysis","Live Probe","Platforms","Data","About"])
+    is_admin = user.get("role") == "admin"
+
+    if is_admin:
+       t1, t2, t3, t4, t5 = st.tabs(["Analysis","Live Probe","Platforms","Data","About"])
+    else:
+       t1, t2, t3, t5 = st.tabs(["Analysis","Live Probe","Platforms","About"])
+       t4 = None
 
     # ══════════════════════════════════════════════════════════════════════════
     #  TAB 1 — ANALYSIS
