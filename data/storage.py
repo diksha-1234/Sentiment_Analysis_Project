@@ -4,9 +4,28 @@ data/storage.py — Persistent Storage for Pulse Sentiment AI
 Uses Supabase (PostgreSQL) when deployed on Streamlit Cloud.
 Falls back to local data/data.csv when running locally.
 
-This solves the data vanishing problem:
-  Without this: data saved to Streamlit's disk → lost on restart
-  With this:    data saved to Supabase database → persists forever
+FEATURES:
+  ✅ Sentiment data persistence (load/save rows)
+  ✅ Translation cache — translations stored in Supabase `translated` column
+     so the same Hindi/Tamil/Bengali text is never sent to API twice
+  ✅ Stats helper
+  ✅ Local CSV fallback for development
+
+Supabase table setup (run once in SQL Editor):
+  ── sentiment_data table ──────────────────────────────────
+  CREATE TABLE sentiment_data (
+      id         BIGSERIAL PRIMARY KEY,
+      scheme     TEXT,
+      source     TEXT,
+      language   TEXT DEFAULT 'en',
+      comment    TEXT UNIQUE,
+      sentiment  TEXT DEFAULT 'Neutral',
+      translated TEXT DEFAULT ''
+  );
+
+  ── Add translated column if table already exists ─────────
+  ALTER TABLE sentiment_data
+  ADD COLUMN IF NOT EXISTS translated TEXT DEFAULT '';
 """
 
 import os
@@ -15,12 +34,15 @@ from pathlib import Path
 
 DATA_CSV = Path("data/data.csv")
 
-# ── Columns must match your CSV exactly ──────────────────────────────────────
+# ── Columns the app expects ───────────────────────────────────────────────────
 COLUMNS = ["ID", "Scheme", "Source", "Language", "Comment", "Sentiment"]
 
 
+# ═════════════════════════════════════════════════════════════════════════════
+#  HELPERS
+# ═════════════════════════════════════════════════════════════════════════════
 def _get_secret(key: str) -> str:
-    """Get secret from Streamlit Cloud or local .env."""
+    """Get secret from Streamlit Cloud secrets or local .env."""
     try:
         import streamlit as st
         return st.secrets.get(key, os.getenv(key, ""))
@@ -46,8 +68,8 @@ def _get_client():
 # ═════════════════════════════════════════════════════════════════════════════
 def load_data() -> pd.DataFrame:
     """
-    Load all data.
-    Deployed  → reads from Supabase database
+    Load all sentiment rows.
+    Deployed  → reads from Supabase
     Local     → reads from data/data.csv
     """
     if _is_deployed():
@@ -56,7 +78,6 @@ def load_data() -> pd.DataFrame:
             response = client.table("sentiment_data").select("*").execute()
             if response.data:
                 df = pd.DataFrame(response.data)
-                # Rename columns to match rest of app
                 df = df.rename(columns={
                     "id":        "ID",
                     "scheme":    "Scheme",
@@ -64,15 +85,14 @@ def load_data() -> pd.DataFrame:
                     "language":  "Language",
                     "comment":   "Comment",
                     "sentiment": "Sentiment",
+                    "translated":"Translated",
                 })
-                # Keep only columns the app needs
                 keep = [c for c in COLUMNS if c in df.columns]
                 return df[keep].reset_index(drop=True)
             else:
                 return pd.DataFrame(columns=COLUMNS)
         except Exception as e:
             print(f"[Storage] Supabase load failed: {e}")
-            # Fall through to local CSV
 
     # Local fallback
     if DATA_CSV.exists():
@@ -88,16 +108,13 @@ def load_data() -> pd.DataFrame:
 # ═════════════════════════════════════════════════════════════════════════════
 def save_rows(rows: list) -> int:
     """
-    Save new unique rows to storage.
-    Deployed  → inserts into Supabase (duplicate comments auto-rejected
-                because Comment column has UNIQUE constraint)
-    Local     → appends to data/data.csv
-
+    Save new unique rows.
+    Deployed  → Supabase (duplicates silently skipped via UNIQUE on comment)
+    Local     → data/data.csv
     Returns number of rows actually saved.
     """
     if not rows:
         return 0
-
     if _is_deployed():
         return _save_to_supabase(rows)
     else:
@@ -105,30 +122,27 @@ def save_rows(rows: list) -> int:
 
 
 def _save_to_supabase(rows: list) -> int:
-    """Insert rows into Supabase. Duplicate comments silently ignored."""
+    """Insert rows into Supabase in batches of 100."""
     try:
-        client = _get_client()
-
-        # Format rows for Supabase — lowercase column names
+        client    = _get_client()
         formatted = []
         for r in rows:
             text = r.get("Comment", "").strip()
             if len(text) < 15:
                 continue
             formatted.append({
-                "scheme":    r.get("Scheme", ""),
-                "source":    r.get("Source", ""),
-                "language":  r.get("Language", "en"),
-                "comment":   text,
-                "sentiment": r.get("Sentiment", "Neutral"),
+                "scheme":     r.get("Scheme", ""),
+                "source":     r.get("Source", ""),
+                "language":   r.get("Language", "en"),
+                "comment":    text,
+                "sentiment":  r.get("Sentiment", "Neutral"),
+                "translated": r.get("Translated", ""),
             })
 
         if not formatted:
             return 0
 
-        # Insert in batches of 100 to avoid timeout
-        # on_conflict="comment" → duplicate comments silently skipped
-        saved = 0
+        saved      = 0
         batch_size = 100
         for i in range(0, len(formatted), batch_size):
             batch = formatted[i:i + batch_size]
@@ -153,14 +167,13 @@ def _save_to_supabase(rows: list) -> int:
 
 
 def _save_to_csv(rows: list) -> int:
-    """Save rows to local CSV — original logic preserved."""
+    """Save rows to local CSV with deduplication."""
     import csv
 
     DATA_CSV.parent.mkdir(exist_ok=True)
 
-    # Load existing normalised comments for dedup
     existing_norm = set()
-    next_id = 1
+    next_id       = 1
     if DATA_CSV.exists():
         try:
             df = pd.read_csv(DATA_CSV, encoding="utf-8", usecols=["ID","Comment"])
@@ -198,6 +211,121 @@ def _save_to_csv(rows: list) -> int:
             w.writerow(r)
 
     return len(deduped)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+#  TRANSLATION CACHE
+#  Stores translations in the `translated` column of sentiment_data.
+#  Same text is never sent to the translation API twice.
+#
+#  Flow:
+#    translate_to_english("यह बेकार है", "hi")
+#      → get_cached_translation("यह बेकार है")
+#          → found in Supabase → return "This is useless"  ✅ no API call
+#          → not found → call Google Translate API
+#                      → save_cached_translation("यह बेकार है", "This is useless")
+#                      → return "This is useless"
+# ═════════════════════════════════════════════════════════════════════════════
+
+# ── In-memory cache (within session — avoids repeated Supabase lookups) ──────
+_translation_memory: dict[str, str] = {}
+
+
+def get_cached_translation(text: str) -> str | None:
+    """
+    Look up a translation.
+    1. Check in-memory dict first  (fastest — no network)
+    2. Check Supabase              (fast — single DB query)
+    3. Return None if not found    (caller must call translation API)
+
+    Only active on deployment. Returns None locally so local dev
+    always uses the translation API directly.
+    """
+    text = text.strip()
+    if not text:
+        return None
+
+    # ── Level 1: in-memory (same session) ────────────────────────────────────
+    if text in _translation_memory:
+        return _translation_memory[text]
+
+    # ── Level 2: Supabase (across sessions) ──────────────────────────────────
+    if not _is_deployed():
+        return None
+
+    try:
+        client = _get_client()
+        res = (
+            client.table("sentiment_data")
+            .select("translated")
+            .eq("comment", text)
+            .limit(1)
+            .execute()
+        )
+        if res.data:
+            cached = res.data[0].get("translated", "").strip()
+            if cached:
+                # Promote to in-memory so next lookup is instant
+                _translation_memory[text] = cached
+                return cached
+        return None
+    except Exception as e:
+        print(f"[Storage] Translation cache lookup failed: {e}")
+        return None
+
+
+def save_cached_translation(text: str, translated: str) -> None:
+    """
+    Save a translation result back to Supabase so it persists forever.
+    Also saves to in-memory cache for the current session.
+
+    Only active on deployment — no-op locally.
+    """
+    text       = text.strip()
+    translated = translated.strip()
+
+    if not text or not translated:
+        return
+
+    # Always save to in-memory
+    _translation_memory[text] = translated
+
+    if not _is_deployed():
+        return
+
+    try:
+        client = _get_client()
+        # Update the row that has this comment text
+        client.table("sentiment_data") \
+            .update({"translated": translated}) \
+            .eq("comment", text) \
+            .execute()
+    except Exception as e:
+        print(f"[Storage] Translation cache save failed: {e}")
+
+
+def get_translation_cache_stats() -> dict:
+    """
+    Returns stats about the translation cache.
+    Useful for debugging — call from app.py Data tab if needed.
+    """
+    stats = {
+        "in_memory_count": len(_translation_memory),
+        "supabase_cached":  0,
+    }
+    if _is_deployed():
+        try:
+            client = _get_client()
+            res = (
+                client.table("sentiment_data")
+                .select("*", count="exact")
+                .neq("translated", "")
+                .execute()
+            )
+            stats["supabase_cached"] = res.count or 0
+        except Exception:
+            pass
+    return stats
 
 
 # ═════════════════════════════════════════════════════════════════════════════
