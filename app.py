@@ -1079,7 +1079,6 @@ else:
     # ══════════════════════════════════════════════════════════════════════════
     #  TAB 4 — DATA
     # ══════════════════════════════════════════════════════════════════════════
-if t4 is not None:
     with t4:
         st.markdown("<div class='card'>", unsafe_allow_html=True)
         st.markdown("<div class='label'>Fetch Live Data</div>", unsafe_allow_html=True)
