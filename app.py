@@ -27,7 +27,7 @@ from modules.model       import train_models, get_detailed_metrics, predict_live
 from modules.scraper     import ALL_SCHEMES, fetch_all
 from auth.auth_manager   import login, signup, get_google_auth_url
 
-# ── Storage layer (works locally via CSV and deployed via Supabase) ───────────
+# ── Storage layer ─────────────────────────────────────────────────────────────
 try:
     from data.storage import load_data as _storage_load_data, get_stats as _storage_get_stats, _is_deployed
 except ImportError:
@@ -39,12 +39,6 @@ except ImportError:
 
 # ── Cache helpers ─────────────────────────────────────────────────────────────
 def _get_data_hash() -> str:
-    """
-    Hash that changes whenever data changes.
-    Deployed (Supabase): uses row count + a time bucket so stale cache is
-                         busted after the first minute following a fetch.
-    Local: uses data/data.csv mtime.
-    """
     try:
         if _is_deployed():
             import time
@@ -58,7 +52,6 @@ def _get_data_hash() -> str:
 
 @st.cache_data(show_spinner=False)
 def _cached_preprocess(data_hash: str, scheme: str):
-    """Load from storage (Supabase or CSV) then preprocess."""
     df_raw = _storage_load_data()
     if df_raw is None or df_raw.empty:
         return pd.DataFrame()
@@ -89,7 +82,6 @@ def _get_redirect_uri() -> str:
 
 REDIRECT_URI = _get_redirect_uri()
 
-# All valid source names — must match scraper.py exactly
 VALID_SOURCES = {
     "YouTube", "News App", "Google News",
     "Dainik Bhaskar", "Amar Ujala", "Navbharat Times",
@@ -556,10 +548,11 @@ if not st.session_state.logged_in:
 # ─────────────────────────────────────────────────────────────────────────────
 #  DASHBOARD
 # ─────────────────────────────────────────────────────────────────────────────
-else:
+else:                                                          # ← 0 spaces
     user   = st.session_state.user_info
     uname  = user.get("name", "User")
     avatar = user.get("avatar", "👤")
+    is_admin = user.get("role") == "admin"
 
     col_t, col_u = st.columns([6, 1])
     with col_t:
@@ -586,14 +579,14 @@ else:
         st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown("<div class='div'></div>", unsafe_allow_html=True)
+
+    # ── Tab creation — always 5 tabs, Data content blocked for non-admin ─────
     t1, t2, t3, t4, t5 = st.tabs(["Analysis","Live Probe","Platforms","Data","About"])
-    
 
     # ══════════════════════════════════════════════════════════════════════════
     #  TAB 1 — ANALYSIS
     # ══════════════════════════════════════════════════════════════════════════
-    with t1:
-        # Banner when new data was fetched and analysis is stale
+    with t1:                                                   # ← 4 spaces
         if st.session_state.get("fetch_done"):
             st.markdown("""
             <div style="background:rgba(251,191,36,0.08);border:1px solid rgba(251,191,36,0.28);
@@ -623,13 +616,12 @@ else:
         st.markdown("</div>", unsafe_allow_html=True)
 
         if run:
-            # Clear all caches so fresh data is loaded from storage
             st.cache_data.clear()
             st.cache_resource.clear()
 
             raw_check = _storage_load_data()
             if raw_check is None or raw_check.empty:
-                st.error("Dataset not found. Run: python data/generate_data.py  (or fetch data from the Data tab)")
+                st.error("No data found. Go to the Data tab (admin) and click Fetch → first.")
                 st.stop()
 
             data_hash = _get_data_hash()
@@ -654,7 +646,7 @@ else:
             st.session_state.analysis_done   = True
             st.session_state.used_dl         = use_dl
             st.session_state.used_tr         = use_tr
-            st.session_state.fetch_done      = False   # banner consumed
+            st.session_state.fetch_done      = False
 
         if st.session_state.analysis_done and st.session_state.df_store is not None:
             df        = st.session_state.df_store
@@ -698,7 +690,6 @@ else:
                 st.markdown("<div class='card'>", unsafe_allow_html=True)
                 st.markdown("<div class='label'>By Platform</div>", unsafe_allow_html=True)
                 if "Source" in df.columns:
-                    # Show every valid source that is actually present — no silent fallback
                     df_plot = df[df["Source"].isin(VALID_SOURCES)].copy()
                     if df_plot.empty:
                         df_plot = df.copy()
@@ -746,7 +737,6 @@ else:
                 st.plotly_chart(fig_sar, use_container_width=True, key="fig_sar")
                 st.markdown("</div>", unsafe_allow_html=True)
 
-            # Platform × Sentiment Heatmap — all sources in analysed df
             if "Source" in df.columns:
                 df_heat = df[df["Source"].isin(VALID_SOURCES)].copy()
                 if df_heat.empty:
@@ -769,7 +759,6 @@ else:
                     st.plotly_chart(fig_heat, use_container_width=True, key="fig_heat")
                     st.markdown("</div>", unsafe_allow_html=True)
 
-            # ── Model Benchmarks ──────────────────────────────────────────────
             st.markdown("<div class='card'>", unsafe_allow_html=True)
             st.markdown("<div class='label'>Model Benchmarks</div>", unsafe_allow_html=True)
 
@@ -849,7 +838,6 @@ else:
                 st.plotly_chart(fig_cmp, use_container_width=True, key="fig_cmp")
             st.markdown("</div>", unsafe_allow_html=True)
 
-            # Dataset preview — sorted so all sources appear, not just the first 50 rows
             st.markdown("<div class='card'>", unsafe_allow_html=True)
             st.markdown("<div class='label'>Dataset Preview</div>", unsafe_allow_html=True)
             show = [c for c in ["Scheme","Source","Lang","Comment","Translated","IsSarcasm","Sentiment"] if c in df.columns]
@@ -857,7 +845,6 @@ else:
             if "Source" in df_preview.columns:
                 df_preview = df_preview.sort_values("Source").reset_index(drop=True)
             st.dataframe(df_preview.head(100), use_container_width=True, height=320)
-            # Source distribution summary
             if "Source" in df.columns:
                 src_counts = df["Source"].value_counts().reset_index()
                 src_counts.columns = ["Source","Rows"]
@@ -876,7 +863,7 @@ else:
     # ══════════════════════════════════════════════════════════════════════════
     #  TAB 2 — LIVE PROBE
     # ══════════════════════════════════════════════════════════════════════════
-    with t2:
+    with t2:                                                   # ← 4 spaces
         st.markdown("<div class='card'>", unsafe_allow_html=True)
         st.markdown("<div class='label'>Live Sentiment Analysis</div>", unsafe_allow_html=True)
 
@@ -996,7 +983,7 @@ else:
     # ══════════════════════════════════════════════════════════════════════════
     #  TAB 3 — PLATFORMS
     # ══════════════════════════════════════════════════════════════════════════
-    with t3:
+    with t3:                                                   # ← 4 spaces
         st.markdown("<div class='card'>", unsafe_allow_html=True)
         st.markdown("<div class='label'>Cross-Platform Sentiment Comparison</div>", unsafe_allow_html=True)
 
@@ -1013,19 +1000,16 @@ else:
 
         if st.session_state.df_store is not None:
             df = st.session_state.df_store
-
             df_plat = df[df["Source"].isin(VALID_SOURCES)].copy()
             if df_plat.empty:
                 df_plat = df.copy()
 
             if "Source" in df_plat.columns and df_plat["Source"].nunique() >= 1:
-                # Percentage breakdown table
                 ps = (df_plat.groupby("Source")["Sentiment"]
                       .value_counts(normalize=True).mul(100).round(1)
                       .unstack(fill_value=0).reset_index())
                 st.dataframe(ps, use_container_width=True, hide_index=True)
 
-                # Heatmap — auto-height scales to number of sources
                 srcs  = sorted(df_plat["Source"].unique().tolist())
                 sents = ["Positive","Negative","Neutral"]
                 z, t  = [], []
@@ -1040,7 +1024,6 @@ else:
                     height=max(300, 50 * len(srcs) + 80))
                 st.plotly_chart(fh, use_container_width=True, key="fig_plat_heat")
 
-                # Grouped bar chart — all sources
                 ss2 = df_plat.groupby(["Source","Sentiment"]).size().reset_index(name="Count")
                 fs  = px.bar(ss2, x="Source", y="Count", color="Sentiment", barmode="group",
                     color_discrete_map={"Positive":"#34d399","Negative":"#fb7185","Neutral":"#fbbf24","Sarcasm":"#a78bfa"})
@@ -1051,7 +1034,6 @@ else:
                     margin=dict(t=10,b=60,l=10,r=10), height=320)
                 st.plotly_chart(fs, use_container_width=True, key="fig_src")
 
-                # Row count per source
                 st.markdown("<div class='label' style='margin-top:18px;'>Source Row Count</div>", unsafe_allow_html=True)
                 src_cnt = df_plat["Source"].value_counts().reset_index()
                 src_cnt.columns = ["Source","Rows"]
@@ -1071,150 +1053,158 @@ else:
         st.markdown("</div>", unsafe_allow_html=True)
 
     # ══════════════════════════════════════════════════════════════════════════
-    #  TAB 4 — DATA
+    #  TAB 4 — DATA  (content only visible to admin)
     # ══════════════════════════════════════════════════════════════════════════
+    with t4:                                                   # ← 4 spaces
+        if not is_admin:
+            st.markdown("""
+            <div style="text-align:center;padding:80px 20px;">
+                <div style="font-size:36px;margin-bottom:14px;">🔒</div>
+                <div style="font-family:'Syne',sans-serif;font-size:17px;font-weight:700;
+                     color:#8fa8c8;margin-bottom:8px;">Admin Access Only</div>
+                <div style="font-family:'Inter',sans-serif;font-size:13px;color:#4a6380;">
+                     Data fetching is restricted to administrators.</div>
+            </div>""", unsafe_allow_html=True)
+        else:
+            st.markdown("<div class='card'>", unsafe_allow_html=True)
+            st.markdown("<div class='label'>Fetch Live Data</div>", unsafe_allow_html=True)
 
-    with t4:
-        st.markdown("<div class='card'>", unsafe_allow_html=True)
-        st.markdown("<div class='label'>Fetch Live Data</div>", unsafe_allow_html=True)
+            st.markdown("""
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:10px;margin-bottom:18px;">
+              <div style="background:var(--bg3);border:1px solid var(--border2);border-radius:8px;padding:12px;text-align:center;">
+                <div style="font-size:18px;margin-bottom:4px;">📺</div>
+                <div style="font-family:'IBM Plex Mono',monospace;font-size:8px;color:#38bdf8;letter-spacing:1.5px;">YOUTUBE</div>
+                <div style="font-family:'Inter',sans-serif;font-size:10px;color:#4a6380;margin-top:3px;">Official API · Real-time</div>
+              </div>
+              <div style="background:var(--bg3);border:1px solid var(--border2);border-radius:8px;padding:12px;text-align:center;">
+                <div style="font-size:18px;margin-bottom:4px;">📰</div>
+                <div style="font-family:'IBM Plex Mono',monospace;font-size:8px;color:#34d399;letter-spacing:1.5px;">NEWS APP</div>
+                <div style="font-family:'Inter',sans-serif;font-size:10px;color:#4a6380;margin-top:3px;">Official API · Real-time</div>
+              </div>
+              <div style="background:var(--bg3);border:1px solid var(--border2);border-radius:8px;padding:12px;text-align:center;">
+                <div style="font-size:18px;margin-bottom:4px;">🌐</div>
+                <div style="font-family:'IBM Plex Mono',monospace;font-size:8px;color:#818cf8;letter-spacing:1.5px;">GOOGLE NEWS</div>
+                <div style="font-family:'Inter',sans-serif;font-size:10px;color:#4a6380;margin-top:3px;">RSS Feed · No key needed</div>
+              </div>
+              <div style="background:var(--bg3);border:1px solid var(--border2);border-radius:8px;padding:12px;text-align:center;">
+                <div style="font-size:18px;margin-bottom:4px;">🗞️</div>
+                <div style="font-family:'IBM Plex Mono',monospace;font-size:8px;color:#fbbf24;letter-spacing:1.5px;">HINDI NEWS RSS</div>
+                <div style="font-family:'Inter',sans-serif;font-size:10px;color:#4a6380;margin-top:3px;">Bhaskar · Ujala · NDTV · ABP</div>
+              </div>
+            </div>""", unsafe_allow_html=True)
 
-        st.markdown("""
-        <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:10px;margin-bottom:18px;">
-          <div style="background:var(--bg3);border:1px solid var(--border2);border-radius:8px;padding:12px;text-align:center;">
-            <div style="font-size:18px;margin-bottom:4px;">📺</div>
-            <div style="font-family:'IBM Plex Mono',monospace;font-size:8px;color:#38bdf8;letter-spacing:1.5px;">YOUTUBE</div>
-            <div style="font-family:'Inter',sans-serif;font-size:10px;color:#4a6380;margin-top:3px;">Official API · Real-time</div>
-          </div>
-          <div style="background:var(--bg3);border:1px solid var(--border2);border-radius:8px;padding:12px;text-align:center;">
-            <div style="font-size:18px;margin-bottom:4px;">📰</div>
-            <div style="font-family:'IBM Plex Mono',monospace;font-size:8px;color:#34d399;letter-spacing:1.5px;">NEWS APP</div>
-            <div style="font-family:'Inter',sans-serif;font-size:10px;color:#4a6380;margin-top:3px;">Official API · Real-time</div>
-          </div>
-          <div style="background:var(--bg3);border:1px solid var(--border2);border-radius:8px;padding:12px;text-align:center;">
-            <div style="font-size:18px;margin-bottom:4px;">🌐</div>
-            <div style="font-family:'IBM Plex Mono',monospace;font-size:8px;color:#818cf8;letter-spacing:1.5px;">GOOGLE NEWS</div>
-            <div style="font-family:'Inter',sans-serif;font-size:10px;color:#4a6380;margin-top:3px;">RSS Feed · No key needed</div>
-          </div>
-          <div style="background:var(--bg3);border:1px solid var(--border2);border-radius:8px;padding:12px;text-align:center;">
-            <div style="font-size:18px;margin-bottom:4px;">🗞️</div>
-            <div style="font-family:'IBM Plex Mono',monospace;font-size:8px;color:#fbbf24;letter-spacing:1.5px;">HINDI NEWS RSS</div>
-            <div style="font-family:'Inter',sans-serif;font-size:10px;color:#4a6380;margin-top:3px;">Bhaskar · Ujala · NDTV · ABP</div>
-          </div>
-        </div>""", unsafe_allow_html=True)
+            f1, f2, f3 = st.columns([3, 1, 1])
+            with f1:
+                fs = st.selectbox("Source scheme", ["All Schemes"] + ALL_SCHEMES, key="fetch_scheme", label_visibility="collapsed")
+            with f2:
+                mx = st.number_input("Max / source", 50, 500, 200, 50, key="max_src", label_visibility="collapsed")
+            with f3:
+                fb = st.button("Fetch →", key="btn_fetch")
 
-        f1, f2, f3 = st.columns([3, 1, 1])
-        with f1:
-            fs = st.selectbox("Source scheme", ["All Schemes"] + ALL_SCHEMES, key="fetch_scheme", label_visibility="collapsed")
-        with f2:
-            mx = st.number_input("Max / source", 50, 500, 200, 50, key="max_src", label_visibility="collapsed")
-        with f3:
-            fb = st.button("Fetch →", key="btn_fetch")
+            if fb:
+                ll = []; lb = st.empty()
+                def _lg(m):
+                    ll.append(m)
+                    lb.markdown(
+                        "<div style='background:var(--bg3);border:1px solid var(--border2);border-radius:10px;"
+                        "padding:14px 18px;font-family:IBM Plex Mono,monospace;font-size:11px;color:#8fa8c8;"
+                        "line-height:1.9;max-height:180px;overflow-y:auto;'>"
+                        + "<br>".join(f"› {x}" for x in ll[-10:]) + "</div>", unsafe_allow_html=True)
 
-        if fb:
-            ll = []; lb = st.empty()
-            def _lg(m):
-                ll.append(m)
-                lb.markdown(
-                    "<div style='background:var(--bg3);border:1px solid var(--border2);border-radius:10px;"
-                    "padding:14px 18px;font-family:IBM Plex Mono,monospace;font-size:11px;color:#8fa8c8;"
-                    "line-height:1.9;max-height:180px;overflow-y:auto;'>"
-                    + "<br>".join(f"› {x}" for x in ll[-10:]) + "</div>", unsafe_allow_html=True)
+                with st.spinner("Fetching from YouTube, NewsAPI, Google News RSS, Hindi News RSS…"):
+                    cnts = fetch_all(scheme="All" if "All" in fs else fs,
+                                     max_per_source=int(mx), progress_callback=_lg)
 
-            with st.spinner("Fetching from YouTube, NewsAPI, Google News RSS, Hindi News RSS…"):
-                cnts = fetch_all(scheme="All" if "All" in fs else fs,
-                                 max_per_source=int(mx), progress_callback=_lg)
+                tot = sum(cnts.values())
 
-            tot = sum(cnts.values())
-
-            source_icons = {
-                "YouTube":"📺","News App":"📰","Google News":"🌐",
-                "Hindi News":"🗞️","Dainik Bhaskar":"🗞️","Amar Ujala":"🗞️",
-                "Navbharat Times":"🗞️","Jagran":"🗞️","NDTV Hindi":"🗞️","ABP Live":"🗞️",
-            }
-            cols = st.columns(max(len(cnts), 1))
-            for col, (src, cnt) in zip(cols, cnts.items()):
-                icon = source_icons.get(src, "📡")
-                col.markdown(f"""<div class="mcard" style="margin-top:10px;">
-                    <div style="font-size:22px;margin-bottom:4px;">{icon}</div>
-                    <div class="mval" style="font-size:24px;">{cnt}</div>
-                    <div class="mlbl">{src}</div>
-                </div>""", unsafe_allow_html=True)
-
-            if tot > 0:
-                # ── KEY FIX: bust all caches and mark analysis stale ──────────
-                st.cache_data.clear()
-                st.cache_resource.clear()
-                st.session_state.analysis_done   = False
-                st.session_state.df_store        = None
-                st.session_state.results_store   = None
-                st.session_state.best_name_store = None
-                st.session_state.metrics_store   = None
-                st.session_state.fetch_done      = True
-                st.success(f"✓ {tot} total items fetched and saved. Go to the Analysis tab and click Run Analysis → to include new data.")
-            else:
-                st.warning("No data fetched — check YOUTUBE_API_KEY and NEWS_API_KEY in secrets/env. Google News RSS and Hindi News RSS require no keys.")
-
-        st.markdown("</div>", unsafe_allow_html=True)
-
-        # ── Dataset Status — reads LIVE from storage every time ───────────────
-        st.markdown("<div class='card'>", unsafe_allow_html=True)
-        st.markdown("<div class='label'>Dataset Status</div>", unsafe_allow_html=True)
-
-        try:
-            ds = _storage_load_data()   # always fresh — no cache here
-
-            if ds is None or ds.empty:
-                st.info("No dataset found. Run: python data/generate_data.py  (or fetch data above)")
-            else:
-                old_sources = set(ds["Source"].unique()) - VALID_SOURCES if "Source" in ds.columns else set()
-                active_src_count = len(VALID_SOURCES & set(ds["Source"].unique())) if "Source" in ds.columns else 0
-                lang_count = ds["Language"].nunique() if "Language" in ds.columns else "—"
-
-                d1, d2, d3, d4 = st.columns(4)
-                for col, (v, l, c) in zip([d1,d2,d3,d4],[
-                    (len(ds),               "Total Rows",    "#38bdf8"),
-                    (ds["Scheme"].nunique(), "Scheme Values", "#34d399"),
-                    (active_src_count,      "Active Sources","#a78bfa"),
-                    (lang_count,            "Languages",     "#fbbf24"),
-                ]):
-                    col.markdown(f"""<div class="mcard">
-                        <div class="mval" style="font-size:26px;">{v}</div>
-                        <div class="mlbl">{l}</div>
+                source_icons = {
+                    "YouTube":"📺","News App":"📰","Google News":"🌐",
+                    "Hindi News":"🗞️","Dainik Bhaskar":"🗞️","Amar Ujala":"🗞️",
+                    "Navbharat Times":"🗞️","Jagran":"🗞️","NDTV Hindi":"🗞️","ABP Live":"🗞️",
+                }
+                cols = st.columns(max(len(cnts), 1))
+                for col, (src, cnt) in zip(cols, cnts.items()):
+                    icon = source_icons.get(src, "📡")
+                    col.markdown(f"""<div class="mcard" style="margin-top:10px;">
+                        <div style="font-size:22px;margin-bottom:4px;">{icon}</div>
+                        <div class="mval" style="font-size:24px;">{cnt}</div>
+                        <div class="mlbl">{src}</div>
                     </div>""", unsafe_allow_html=True)
 
-                if ds["Scheme"].nunique() > 40:
-                    st.info(f"ℹ️ Scheme count shows {ds['Scheme'].nunique()} because data.csv contains both short names (from generate_data.py) and full names (from scraper.py). Run data/fix_data.py to normalise.")
+                if tot > 0:
+                    st.cache_data.clear()
+                    st.cache_resource.clear()
+                    st.session_state.analysis_done   = False
+                    st.session_state.df_store        = None
+                    st.session_state.results_store   = None
+                    st.session_state.best_name_store = None
+                    st.session_state.metrics_store   = None
+                    st.session_state.fetch_done      = True
+                    st.success(f"✓ {tot} total items fetched and saved. Go to the Analysis tab and click Run Analysis → to include new data.")
+                else:
+                    st.warning("No data fetched — check YOUTUBE_API_KEY and NEWS_API_KEY in secrets/env. Google News RSS and Hindi News RSS require no keys.")
 
-                if old_sources:
-                    st.info(f"ℹ️ Legacy source(s) still in dataset: {', '.join(sorted(old_sources))}. Run data/fix_data.py to remove them.")
+            st.markdown("</div>", unsafe_allow_html=True)
 
-                # Source distribution chart — current sources highlighted
-                if "Source" in ds.columns:
-                    sc2 = ds["Source"].value_counts().reset_index()
-                    sc2.columns = ["Source", "Count"]
-                    sc2["Status"] = sc2["Source"].apply(
-                        lambda x: "Current" if x in VALID_SOURCES else "Legacy"
-                    )
-                    fs2 = px.bar(sc2, x="Source", y="Count", color="Status",
-                        color_discrete_map={"Current":"#38bdf8","Legacy":"#2a3a50"},
-                        labels={"Source":"","Count":"Count","Status":"Status"})
-                    fs2.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                        font_color="#8fa8c8",
-                        legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color="#8fa8c8")),
-                        xaxis=dict(showgrid=False, color="#4a6380", tickangle=-30),
-                        yaxis=dict(showgrid=False, color="#4a6380"),
-                        margin=dict(t=10,b=70,l=5,r=5), height=220)
-                    st.plotly_chart(fs2, use_container_width=True, key="fig_ds_src")
+            # ── Dataset Status ────────────────────────────────────────────────
+            st.markdown("<div class='card'>", unsafe_allow_html=True)
+            st.markdown("<div class='label'>Dataset Status</div>", unsafe_allow_html=True)
 
-        except Exception as e:
-            st.error(f"Could not load dataset: {e}")
+            try:
+                ds = _storage_load_data()
 
-        st.markdown("</div>", unsafe_allow_html=True)
+                if ds is None or ds.empty:
+                    st.info("No dataset found. Fetch data above to get started.")
+                else:
+                    old_sources      = set(ds["Source"].unique()) - VALID_SOURCES if "Source" in ds.columns else set()
+                    active_src_count = len(VALID_SOURCES & set(ds["Source"].unique())) if "Source" in ds.columns else 0
+                    lang_count       = ds["Language"].nunique() if "Language" in ds.columns else "—"
+
+                    d1, d2, d3, d4 = st.columns(4)
+                    for col, (v, l, c) in zip([d1,d2,d3,d4],[
+                        (len(ds),               "Total Rows",    "#38bdf8"),
+                        (ds["Scheme"].nunique(), "Scheme Values", "#34d399"),
+                        (active_src_count,       "Active Sources","#a78bfa"),
+                        (lang_count,             "Languages",     "#fbbf24"),
+                    ]):
+                        col.markdown(f"""<div class="mcard">
+                            <div class="mval" style="font-size:26px;">{v}</div>
+                            <div class="mlbl">{l}</div>
+                        </div>""", unsafe_allow_html=True)
+
+                    if ds["Scheme"].nunique() > 40:
+                        st.info(f"ℹ️ Scheme count shows {ds['Scheme'].nunique()} because dataset contains both short and full scheme names.")
+
+                    if old_sources:
+                        st.info(f"ℹ️ Legacy source(s) still in dataset: {', '.join(sorted(old_sources))}.")
+
+                    if "Source" in ds.columns:
+                        sc2 = ds["Source"].value_counts().reset_index()
+                        sc2.columns = ["Source", "Count"]
+                        sc2["Status"] = sc2["Source"].apply(
+                            lambda x: "Current" if x in VALID_SOURCES else "Legacy"
+                        )
+                        fs2 = px.bar(sc2, x="Source", y="Count", color="Status",
+                            color_discrete_map={"Current":"#38bdf8","Legacy":"#2a3a50"},
+                            labels={"Source":"","Count":"Count","Status":"Status"})
+                        fs2.update_layout(
+                            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                            font_color="#8fa8c8",
+                            legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color="#8fa8c8")),
+                            xaxis=dict(showgrid=False, color="#4a6380", tickangle=-30),
+                            yaxis=dict(showgrid=False, color="#4a6380"),
+                            margin=dict(t=10,b=70,l=5,r=5), height=220)
+                        st.plotly_chart(fs2, use_container_width=True, key="fig_ds_src")
+
+            except Exception as e:
+                st.error(f"Could not load dataset: {e}")
+
+            st.markdown("</div>", unsafe_allow_html=True)
 
     # ══════════════════════════════════════════════════════════════════════════
     #  TAB 5 — ABOUT
     # ══════════════════════════════════════════════════════════════════════════
-    with t5:
+    with t5:                                                   # ← 4 spaces
         st.markdown("""
         <div class="card" style="text-align:center;padding:40px 36px;">
             <div style="font-family:'IBM Plex Mono',monospace;font-size:9.5px;color:#38bdf8;letter-spacing:3px;text-transform:uppercase;margin-bottom:16px;">Final Year Research Project</div>
@@ -1269,7 +1259,7 @@ else:
             </div>""", unsafe_allow_html=True)
 
     # ── Footer ────────────────────────────────────────────────────────────────
-    st.markdown("""
+    st.markdown("""                                            
     <div style="text-align:center;padding:40px 0 20px;font-family:'IBM Plex Mono',monospace;
          font-size:9px;color:#2a3a50;letter-spacing:3px;text-transform:uppercase;">
         Pulse Sentiment AI &nbsp;·&nbsp; Research Edition &nbsp;·&nbsp; 2025–26
