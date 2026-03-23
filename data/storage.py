@@ -75,9 +75,24 @@ def load_data() -> pd.DataFrame:
     if _is_deployed():
         try:
             client   = _get_client()
-            response = client.table("sentiment_data").select("*").execute()
-            if response.data:
-                df = pd.DataFrame(response.data)
+            all_data = []
+            batch_size = 1000
+            offset = 0
+            while True:
+                response = (
+                    client.table("sentiment_data")
+                    .select("*")
+                    .range(offset, offset + batch_size - 1)
+                    .execute()
+                )
+                if not response.data:
+                   break
+                all_data.extend(response.data)
+                if len(response.data) < batch_size:
+                   break
+                offset += batch_size
+            if all.data:
+                df = pd.DataFrame(all.data)
                 df = df.rename(columns={
                     "id":        "ID",
                     "scheme":    "Scheme",
