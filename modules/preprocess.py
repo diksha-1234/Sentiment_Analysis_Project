@@ -268,32 +268,26 @@ def _is_already_english(text: str) -> bool:
 def translate_to_english(text: str, src_lang: str = "auto") -> str:
     """
     Translates text to English.
-
     FIX 5 — Sarcasm marker preservation:
     Before translating, we extract:
       - Sarcasm emojis (🙄😒😏 etc.) — Google Translate often strips these
       - Exclamation count — multiple !! are sarcasm signals
       - ALL-CAPS ratio — used by VADER for intensity detection
     After translating, we reattach any markers that were stripped.
-
     Why this matters:
       Original: "हाँ हाँ, बहुत अच्छी योजना! 😒!!"
       Without fix: "Yes yes, very good plan!"      ← sarcasm signal LOST
       With fix:    "Yes yes, very good plan! 😒!!" ← sarcasm signal PRESERVED
-
     This ensures:
       - ML models trained on translated text still see sarcasm features
       - VADER still detects !! intensity on translated text
       - Sarcasm penalty in model selection still fires correctly
     """
     global _trans_cache, _cache_dirty
-
     if not text or not text.strip():
         return text
-
     if src_lang in ("en", "english") and _is_already_english(text):
         return text
-
     if src_lang == "hinglish":
         return text
 
@@ -301,7 +295,6 @@ def translate_to_english(text: str, src_lang: str = "auto") -> str:
     sarc_emojis_found = [c for c in text if c in _SARC_EMOJIS_PRESERVE]
     exclaim_count     = text.count("!")
     question_count    = text.count("?")
-
     # Detect ALL-CAPS words (intensity signal for VADER)
     # We preserve up to 2 caps words if they exist
     words_list  = text.split()
@@ -310,15 +303,28 @@ def translate_to_english(text: str, src_lang: str = "auto") -> str:
     # ── End extraction ────────────────────────────────────────────────────────
 
     cache_key = text.strip()[:400]
+
+    # ── Level 1: in-memory cache (within session) ─────────────────────────────
     if cache_key in _trans_cache:
         cached = _trans_cache[cache_key]
-        # Still reattach markers even from cache — cache may be from old version
         return _reattach_markers(cached, sarc_emojis_found,
                                  exclaim_count, question_count, caps_words)
 
+    # ── Level 2: Supabase translation cache (across sessions, deployment only) ─
+    try:
+        from data.storage import get_cached_translation, save_cached_translation
+        supabase_cached = get_cached_translation(cache_key)
+        if supabase_cached and supabase_cached.strip():
+            # Promote to in-memory so next lookup in this session is instant
+            _trans_cache[cache_key] = supabase_cached
+            return _reattach_markers(supabase_cached, sarc_emojis_found,
+                                     exclaim_count, question_count, caps_words)
+    except Exception:
+        pass
+
+    # ── Level 3: actual Google Translate API call (only for truly new text) ───
     if not TRANSLATOR_OK:
         return text
-
     try:
         translated = GoogleTranslator(source="auto", target="en").translate(str(text)[:500])
         result = translated if translated and translated.strip() else text
@@ -330,8 +336,15 @@ def translate_to_english(text: str, src_lang: str = "auto") -> str:
                                exclaim_count, question_count, caps_words)
     # ── End reattachment ──────────────────────────────────────────────────────
 
+    # ── Save to both in-memory and Supabase cache ─────────────────────────────
     _trans_cache[cache_key] = result
     _cache_dirty = True
+    try:
+        from data.storage import save_cached_translation
+        save_cached_translation(cache_key, result)
+    except Exception:
+        pass
+
     return result
 
 
