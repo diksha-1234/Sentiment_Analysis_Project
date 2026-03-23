@@ -202,8 +202,6 @@ def _save_to_supabase(rows: list) -> int:
         formatted = []
         for r in rows:
             text = r.get("Comment", "").strip()
-            if len(text) < 15:
-                continue
             formatted.append({
                 "scheme":     r.get("Scheme", ""),
                 "source":     r.get("Source", ""),
@@ -264,7 +262,6 @@ def _save_to_csv(rows: list) -> int:
     for r in rows:
         text = r.get("Comment", "").strip()
         norm = " ".join(text.lower().split())
-        if len(text) < 15:        continue
         if norm in seen_in_batch: continue
         if norm in existing_norm: continue
         seen_in_batch.add(norm)
