@@ -13,7 +13,6 @@ TRANSLATION FIXES (new — to support winning conditions):
              Hindi/Tamil text is converted to English.
              Without this: "हाँ हाँ बहुत अच्छा! 😒" → "Yes yes very good!"
              With this:    "Yes yes very good! 😒!!"  ← sarcasm signal preserved
-  ✅ FIX 6: balance dataset
 """
 
 import re
@@ -624,20 +623,5 @@ def preprocess_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     if final_invalid.any():
         df.loc[final_invalid, "Sentiment"] = "Neutral"
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # DATA BALANCING — FIX 6
-    # ─────────────────────────────────────────────────────────────────────────
-    try:
-        class_counts = df["Sentiment"].value_counts()
-        min_count = class_counts.min()
-
-        df = df.groupby("Sentiment").apply(
-            lambda x: x.sample(min_count, random_state=42)
-        ).reset_index(drop=True)
-
-        print(f"[BALANCE] Dataset balanced to {min_count} samples per class")
-
-    except Exception as e:
-        print(f"[BALANCE WARNING] Could not balance dataset: {e}")
-
+ 
     return df
