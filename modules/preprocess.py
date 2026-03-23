@@ -515,7 +515,6 @@ _UNKNOWN_SOURCE = {
     "nan","NaN","","null","Null","N/A","n/a","?"
 }
 
-
 def preprocess_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
 
@@ -561,16 +560,14 @@ def preprocess_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     else:
         df["Lang"] = df["text"].apply(detect_language)
 
-    # ── Translation (FIX 5 sarcasm preservation happens inside here) ──────────
+    # ── Translation ───────────────────────────────────────────────────────────
     df["Translated"] = _translate_series_fast(df["text"], df["Lang"])
 
-    # ── Sarcasm detection — runs on ORIGINAL text before translation ──────────
-    # This is correct — sarcasm must be detected on the original language
-    # because Hindi sarcasm phrases and emojis are in the original text
+    # ── Sarcasm detection ─────────────────────────────────────────────────────
     df["IsSarcasm"]    = df["text"].apply(detect_sarcasm)
     df["SarcasmScore"] = df["text"].apply(lambda t: round(sarcasm_score(t)*100,1))
 
-    # ── Text cleaning — on translated text (with sarcasm markers preserved) ───
+    # ── Text cleaning ─────────────────────────────────────────────────────────
     df["Cleaned"] = df["Translated"].apply(clean_text)
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -608,16 +605,16 @@ def preprocess_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 
         df["Sentiment"] = df.apply(_full_label, axis=1)
 
-    # ── Sarcasm correction on final labels ────────────────────────────────────
+    # ── Sarcasm correction ────────────────────────────────────────────────────
     flip = df["IsSarcasm"] & (df["Sentiment"] == "Positive")
     df.loc[flip, "Sentiment"] = "Negative"
 
-    # ── Restore Source / Scheme ────────────────────────────────────────────────
+    # ── Restore Source / Scheme ───────────────────────────────────────────────
     df["Source"]  = df["source"]
     df["Scheme"]  = df.get("scheme", pd.Series("General", index=df.index))
     df["Comment"] = df["text"]
 
-    # ── Drop rows with empty cleaned text ─────────────────────────────────────
+    # ── Drop empty cleaned text ───────────────────────────────────────────────
     df = df[df["Cleaned"].str.strip().str.len() > 1].reset_index(drop=True)
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -627,18 +624,20 @@ def preprocess_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     if final_invalid.any():
         df.loc[final_invalid, "Sentiment"] = "Neutral"
 
-     # ─────────────────────────────────────────────────────────────────────────
-     # DATA BALANCING — prevent bias towards majority class--FIX 6
-     # ─────────────────────────────────────────────────────────────────────────
-     try:
-         class_counts = df["Sentiment"].value_counts()
-         min_count = class_counts.min()
+    # ─────────────────────────────────────────────────────────────────────────
+    # DATA BALANCING — FIX 6
+    # ─────────────────────────────────────────────────────────────────────────
+    try:
+        class_counts = df["Sentiment"].value_counts()
+        min_count = class_counts.min()
 
-         df = df.groupby("Sentiment").apply(
-             lambda x: x.sample(min_count, random_state=42)
-         ).reset_index(drop=True)
+        df = df.groupby("Sentiment").apply(
+            lambda x: x.sample(min_count, random_state=42)
+        ).reset_index(drop=True)
 
-         print(f"[BALANCE] Dataset balanced to {min_count} samples per class")
-     except Exception as e:
-         print(f"[BALANCE WARNING] Could not balance dataset: {e}")
-return df
+        print(f"[BALANCE] Dataset balanced to {min_count} samples per class")
+
+    except Exception as e:
+        print(f"[BALANCE WARNING] Could not balance dataset: {e}")
+
+    return df
