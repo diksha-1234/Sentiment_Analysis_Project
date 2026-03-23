@@ -39,32 +39,75 @@ except ImportError:
 
 # ── Cache helpers ─────────────────────────────────────────────────────────────
 def _get_data_hash() -> str:
+    """
+    Returns a hash string that changes when new data exists in Supabase.
+    Uses real row count from get_stats() — never reads 1000-capped REST API.
+    Refreshes every 30 seconds so stale cache doesn't survive a re-run.
+    """
     try:
-        if _is_deployed():
-            import time
-            stats = _storage_get_stats()
-            bucket = str(int(time.time() // 60))
-            return f"{stats.get('total_rows', 0)}-{bucket}"
-        else:
-            return str(os.path.getmtime("data/data.csv"))
+        stats = _storage_get_stats()
+        total = stats.get("total_rows", 0)
+        import time
+        # 30-second bucket — forces cache refresh every 30s after a fetch
+        bucket = str(int(time.time() // 30))
+        return f"rows-{total}-{bucket}"
     except Exception:
-        return "0"
+        import time
+        return f"fallback-{int(time.time() // 30)}"
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(
+    show_spinner=False,
+    max_entries=4,          # Keep up to 4 cached scheme preprocessings
+    ttl=1800,               # Auto-expire after 30 minutes
+)
 def _cached_preprocess(data_hash: str, scheme: str):
+    """
+    Loads + preprocesses data. Cached by data_hash + scheme.
+ 
+    max_entries=4  → remembers up to 4 schemes before evicting oldest
+    ttl=1800       → always re-runs after 30 minutes (catches fresh fetches)
+ 
+    For 14,000 rows: first run takes ~30-60s, subsequent runs are instant.
+    """
     df_raw = _storage_load_data()
     if df_raw is None or df_raw.empty:
         return pd.DataFrame()
+ 
+    print(f"[App] Raw data loaded: {len(df_raw)} rows")
+ 
     if scheme != "All Schemes":
-        key   = scheme.split("—")[0].strip().split(" ")[0]
-        df_f  = df_raw[df_raw["Scheme"].str.contains(key, case=False, na=False)]
+        key  = scheme.split("—")[0].strip().split(" ")[0]
+        df_f = df_raw[df_raw["Scheme"].str.contains(key, case=False, na=False)]
+        # Only filter if we have enough data for that scheme
         df_raw = df_f if len(df_f) >= 10 else df_raw
+        print(f"[App] Scheme filter '{key}': {len(df_raw)} rows")
+ 
     return preprocess_dataframe(df_raw)
-@st.cache_resource
+
+
+@st.cache_resource(
+    max_entries=4,          # Keep up to 4 trained model sets
+)
 def _cached_train(data_hash: str, scheme: str, use_dl: bool, use_tr: bool):
+    """
+    Trains all ML models on preprocessed data.
+    cached_resource keeps the model objects in memory (not serialised).
+ 
+    For 14,000 rows: training 9 models takes ~20-40s, then instant.
+    """
     df_inner = _cached_preprocess(data_hash, scheme)
-    return train_models(df_inner["Cleaned"], df_inner["Sentiment"],
-            use_dl=use_dl, use_transformers=use_tr, df_meta=df_inner)
+    if df_inner is None or df_inner.empty:
+        return {}, "N/A"
+ 
+    print(f"[App] Training on {len(df_inner)} preprocessed rows...")
+    return train_models(
+        df_inner["Cleaned"],
+        df_inner["Sentiment"],
+        use_dl=use_dl,
+        use_transformers=use_tr,
+        df_meta=df_inner,
+    )
+ 
 
 # ── Config ────────────────────────────────────────────────────────────────────
 st.set_page_config(page_title="Pulse · Sentiment AI", page_icon="🧠",
