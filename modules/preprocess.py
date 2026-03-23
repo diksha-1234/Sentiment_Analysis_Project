@@ -13,13 +13,7 @@ TRANSLATION FIXES (new — to support winning conditions):
              Hindi/Tamil text is converted to English.
              Without this: "हाँ हाँ बहुत अच्छा! 😒" → "Yes yes very good!"
              With this:    "Yes yes very good! 😒!!"  ← sarcasm signal preserved
-  ✅ FIX 6: preprocess_dataframe() — stores df["Original"] BEFORE translation.
-             Transformer models (Multilingual BERT) receive original multilingual
-             text so they can use their native multilingual understanding.
-             Without this: Multilingual BERT gets pre-translated English =
-             no advantage over Classical ML.
-             With this: Multilingual BERT gets raw Hindi/Tamil/English text =
-             full multilingual advantage restored.
+  ✅ FIX 6: balance dataset
 """
 
 import re
@@ -568,27 +562,6 @@ def preprocess_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     else:
         df["Lang"] = df["text"].apply(detect_language)
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # FIX 6 — Store Original text BEFORE translation
-    #
-    # Why: Transformer models (Multilingual BERT, mBERT) are pre-trained on
-    # 104 languages natively. They understand Hindi, Tamil, Telugu script
-    # directly — no translation needed. If we translate first and give BERT
-    # pre-translated English, we lose its core multilingual advantage.
-    #
-    # How it's used: model.py reads df_meta["Original"] and passes original
-    # multilingual text to Transformer models instead of cleaned English.
-    # Classical ML and DL still use the Cleaned (translated) column.
-    #
-    # Result:
-    #   Classical ML / DL : Cleaned (translated English) → TF-IDF / embedding
-    #   Transformer/BERT  : Original (raw multilingual)  → native understanding
-    # ─────────────────────────────────────────────────────────────────────────
-    df["Original"] = df["text"].copy()
-    non_en_count = df["Lang"].isin(["hi","hinglish","ta","te","bn"]).sum()
-    print(f"[ORIGINAL] Stored {len(df)} original texts "
-          f"({non_en_count} non-English rows preserved for Transformer models)")
-
     # ── Translation (FIX 5 sarcasm preservation happens inside here) ──────────
     df["Translated"] = _translate_series_fast(df["text"], df["Lang"])
 
@@ -655,4 +628,19 @@ def preprocess_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     if final_invalid.any():
         df.loc[final_invalid, "Sentiment"] = "Neutral"
 
-    return df
+     # ─────────────────────────────────────────────────────────────────────────
+     # DATA BALANCING — prevent bias towards majority class--FIX 6
+     # ─────────────────────────────────────────────────────────────────────────
+     try:
+         class_counts = df["Sentiment"].value_counts()
+         min_count = class_counts.min()
+
+         df = df.groupby("Sentiment").apply(
+             lambda x: x.sample(min_count, random_state=42)
+         ).reset_index(drop=True)
+
+         print(f"[BALANCE] Dataset balanced to {min_count} samples per class")
+     except Exception as e:
+         print(f"[BALANCE WARNING] Could not balance dataset: {e}")
+
+     return df
