@@ -623,5 +623,9 @@ def preprocess_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     if final_invalid.any():
         df.loc[final_invalid, "Sentiment"] = "Neutral"
 
- 
+    print("\n📊 COMMENTS PER SCHEME (AFTER PREPROCESSING):")
+    print(df["Scheme"].value_counts())
+
+    print("\n📊 TOTAL COMMENTS AFTER PREPROCESSING:")
+    print(len(df))
     return df
