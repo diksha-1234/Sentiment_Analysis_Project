@@ -487,7 +487,6 @@ def _score_text(text: str) -> str:
 def get_textblob_sentiment(text: str) -> str:
     return _score_text(text)
 
-
 def get_sentiment(text: str) -> str:
     """Full live pipeline: detect → translate → Hindi keywords → ensemble."""
     lang    = detect_language(text)
@@ -631,7 +630,7 @@ def preprocess_dataframe(df: pd.DataFrame) -> pd.DataFrame:
      # ─────────────────────────────────────────────────────────────────────────
      # DATA BALANCING — prevent bias towards majority class--FIX 6
      # ─────────────────────────────────────────────────────────────────────────
-     try:
+try:
          class_counts = df["Sentiment"].value_counts()
          min_count = class_counts.min()
 
@@ -640,7 +639,6 @@ def preprocess_dataframe(df: pd.DataFrame) -> pd.DataFrame:
          ).reset_index(drop=True)
 
          print(f"[BALANCE] Dataset balanced to {min_count} samples per class")
-     except Exception as e:
+except Exception as e:
          print(f"[BALANCE WARNING] Could not balance dataset: {e}")
-
-     return df
+return df
