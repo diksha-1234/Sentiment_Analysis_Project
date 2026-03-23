@@ -92,8 +92,8 @@ def load_data() -> pd.DataFrame:
                 if len(response.data) < batch_size:
                    break
                 offset += batch_size
-            if all.data:
-                df = pd.DataFrame(all.data)
+            if all_data:
+                df = pd.DataFrame(all_data)
                 df = df.rename(columns={
                     "id":        "ID",
                     "scheme":    "Scheme",
