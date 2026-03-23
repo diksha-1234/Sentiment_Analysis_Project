@@ -608,13 +608,11 @@ else:                                                          # ← 0 spaces
         st.markdown("<div class='label'>Select Scheme</div>", unsafe_allow_html=True)
 
         scheme_options = ["All Schemes"] + ALL_SCHEMES
-        sc1, sc2, sc3 = st.columns([3, 1, 1])
+        sc1, = st.columns([3])
         with sc1:
             scheme = st.selectbox("Scheme", scheme_options, label_visibility="collapsed", key="sel_scheme")
-        with sc2:
-            use_dl = st.checkbox("Deep Learning", value=False, key="use_dl")
-        with sc3:
-            use_tr = st.checkbox("Transformers", value=False, key="use_tr")
+        use_dl = False
+        use_tr = False
 
         r1, _ = st.columns([1, 5])
         with r1:
