@@ -1066,8 +1066,8 @@ else:                                                          # ← 0 spaces
             st.markdown("<div class='card'>", unsafe_allow_html=True)
             st.markdown("<div class='label'>Fetch Live Data</div>", unsafe_allow_html=True)
             # ── Force refresh from Supabase ───────────────────────────────────────────
-           rc1, rc2 = st.columns([1, 5])
-           with rc1:
+            rc1, rc2 = st.columns([1, 5])
+            with rc1:
                if st.button("🗑️ Clear Cache", key="btn_clear_cache"):
                  from data.storage import force_refresh
                  force_refresh()
