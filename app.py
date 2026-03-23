@@ -1223,7 +1223,7 @@ else:                                                          # ← 0 spaces
              "Multi-source architecture covers YouTube (Official API), NewsAPI (Official API), Google News RSS (real-time English headlines), and Hindi News RSS — Dainik Bhaskar, Amar Ujala, Navbharat Times, Jagran, NDTV Hindi, ABP Live. Cross-platform comparison in the Platforms tab."),
             ("03","Random Model Selection","#34d399",
              "Researchers arbitrarily select algorithms without benchmarking them against the specific dataset characteristics.",
-             "Adaptive engine profiles data volume, sarcasm ratio, language diversity, and avg comment length. Trains 7 classical ML models + TextBlob + VADER. Best model selected by data-aware scoring. Optional LSTM, BiLSTM, CNN, ALBERT, DistilBERT."),
+             "Adaptive engine profiles data volume, sarcasm ratio, language diversity, and avg comment length. Trains 7 classical ML models + TextBlob + VADER. Best model selected by data-aware scoring."),
             ("04","Binary Classification","#fbbf24",
              "Most studies output only Positive / Negative, discarding the Neutral class that represents a large portion of real public opinion.",
              "Three-class classification: Positive / Neutral / Negative with per-class F1, Precision, and Recall metrics for each model."),
