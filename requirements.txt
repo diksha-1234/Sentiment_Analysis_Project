@@ -17,6 +17,4 @@ lxml
 google-api-python-client
 newsapi-python
 supabase
-tensorflow-cpu
-transformers
-torch --index-url https://download.pytorch.org/whl/cpu
+
