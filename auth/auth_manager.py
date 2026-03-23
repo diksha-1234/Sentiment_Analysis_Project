@@ -6,6 +6,13 @@ Works with both local (users.json) and Supabase (deployed).
 
 DEMO ACCOUNT: admin / 1234  — auto-created if not found, no registration needed.
 
+FIXES vs original:
+  ✅ exchange_google_code() now accepts optional client_id / client_secret /
+     redirect_uri args to match app.py's 4-arg call signature.
+  ✅ exchange_google_code() now persists the Google user via
+     google_login_or_register() so "user not found" never happens on
+     the second login.
+
 SUPABASE SETUP — run this SQL once in your Supabase SQL editor:
 ──────────────────────────────────────────────────────────────
     CREATE TABLE IF NOT EXISTS users (
@@ -31,7 +38,7 @@ STREAMLIT SECRETS (secrets.toml or Streamlit Cloud dashboard):
     REDIRECT_URI         = "https://your-app.streamlit.app/"
 """
 
-from __future__ import annotations  # makes all type hints strings → no runtime issues
+from __future__ import annotations
 
 import os
 import json
@@ -188,7 +195,6 @@ def _ensure_supabase_admin() -> None:
         ).execute()
         _admin_ensured["supabase"] = True
     except Exception as e:
-        # Non-fatal: log and continue — admin may already exist
         print(f"[Auth] Could not ensure admin in Supabase: {e}")
         _admin_ensured["supabase"] = True  # Don't retry on every call
 
@@ -336,7 +342,6 @@ def get_google_auth_url(
         get_google_auth_url(GOOGLE_CLIENT_ID, REDIRECT_URI)
 
     Falls back to secrets if args are omitted / empty.
-    Secret key for redirect URI is REDIRECT_URI (matches app.py).
     """
     import urllib.parse
 
@@ -359,10 +364,28 @@ def get_google_auth_url(
     return f"https://accounts.google.com/o/oauth2/v2/auth?{urllib.parse.urlencode(params)}"
 
 
-def exchange_google_code(code: str) -> Optional[Dict]:
+def exchange_google_code(
+    code: str,
+    client_id: Optional[str] = None,
+    client_secret: Optional[str] = None,
+    redirect_uri: Optional[str] = None,
+) -> Optional[Dict]:
     """
     Exchange an OAuth authorisation code for Google user info.
-    Returns the raw Google profile dict, or None on failure.
+
+    FIX: Accepts optional client_id / client_secret / redirect_uri args so that
+    app.py's 4-argument call signature works:
+        exchange_google_code(params["code"], GOOGLE_CLIENT_ID,
+                             GOOGLE_CLIENT_SECRET, REDIRECT_URI)
+    Falls back to secrets / env vars if any arg is None or empty.
+
+    FIX: After getting the Google profile, persists the user via
+    google_login_or_register() so the second login never raises
+    "user not found".
+
+    Returns the raw Google profile dict (keys: name, email, id …),
+    which is what app.py reads with .get("name") and .get("email").
+    Returns None on failure.
     """
     try:
         import requests as _requests  # type: ignore
@@ -370,9 +393,14 @@ def exchange_google_code(code: str) -> Optional[Dict]:
         print("[Auth] 'requests' library not installed — cannot exchange Google code.")
         return None
 
-    client_id     = _get_secret("GOOGLE_CLIENT_ID")
-    client_secret = _get_secret("GOOGLE_CLIENT_SECRET")
-    redirect_uri  = _get_secret("REDIRECT_URI")
+    # Use passed values or fall back to secrets
+    client_id     = (client_id     or "").strip() or _get_secret("GOOGLE_CLIENT_ID")
+    client_secret = (client_secret or "").strip() or _get_secret("GOOGLE_CLIENT_SECRET")
+    redirect_uri  = (redirect_uri  or "").strip() or _get_secret("REDIRECT_URI")
+
+    if not client_id or not client_secret or not redirect_uri:
+        print("[Auth] exchange_google_code: missing credentials — cannot exchange code.")
+        return None
 
     try:
         token_res = _requests.post(
@@ -400,11 +428,23 @@ def exchange_google_code(code: str) -> Optional[Dict]:
             headers={"Authorization": f"Bearer {access_token}"},
             timeout=10,
         )
-        return info_res.json()
+        google_info = info_res.json()
 
     except Exception as e:
         print(f"[Auth] Google OAuth exchange failed: {e}")
         return None
+
+    if not google_info:
+        return None
+
+    # ── FIX: persist the Google user so second login never fails ──────────────
+    try:
+        google_login_or_register(google_info)
+    except Exception as e:
+        # Non-fatal — session can still be created even if DB save fails
+        print(f"[Auth] google_login_or_register failed (non-fatal): {e}")
+
+    return google_info
 
 
 def google_login_or_register(google_info: Dict) -> Tuple[bool, str, Dict]:
