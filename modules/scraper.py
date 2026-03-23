@@ -393,10 +393,11 @@ def _save_rows_local(rows: list) -> int:
 # ═════════════════════════════════════════════════════════════════════════════
 #  YOUTUBE FETCHER  — Official API, real-time, unchanged
 # ═════════════════════════════════════════════════════════════════════════════
-def fetch_youtube(scheme, limit=300, cb=None):
+def fetch_youtube(scheme, limit=500, cb=None):
     if not YOUTUBE_API_KEY:
         if cb: cb("YouTube: No API key — add YOUTUBE_API_KEY to .env")
         return []
+
     try:
         from googleapiclient.discovery import build
         yt = build("youtube", "v3", developerKey=YOUTUBE_API_KEY)
@@ -404,35 +405,83 @@ def fetch_youtube(scheme, limit=300, cb=None):
         if cb: cb("YouTube: Run → pip install google-api-python-client")
         return []
 
+    from data.storage import load_data
+
     rows = []
     seen = set()
-    for kw in SCHEME_KEYWORDS.get(scheme, [scheme])[:2]:
-        if len(rows) >= limit: break
+
+    # ✅ Prevent duplicates across previous runs
+    try:
+        existing_comments = set(
+            load_data()["Comment"].dropna().str.lower().str.strip()
+        )
+    except Exception:
+        existing_comments = set()
+
+    for kw in SCHEME_KEYWORDS.get(scheme, [scheme])[:5]:  # ✅ more keywords
+        if len(rows) >= limit:
+            break
+
         try:
-            vids = yt.search().list(
-                q=kw, part="id", type="video",
-                maxResults=8, regionCode="IN", order="relevance"
-            ).execute()
-            for v in vids.get("items", []):
-                if len(rows) >= limit: break
-                try:
-                    comments = yt.commentThreads().list(
-                        part="snippet", videoId=v["id"]["videoId"],
-                        maxResults=100, textFormat="plainText"
-                    ).execute()
-                    for c in comments.get("items", []):
-                        t    = c["snippet"]["topLevelComment"]["snippet"]["textDisplay"].strip()
-                        norm = _normalise(t)
-                        if len(t) >= 15 and norm not in seen:
-                            seen.add(norm)
-                            lang = _detect_lang(t)
-                            rows.append(_make_row(scheme, "YouTube", lang, t))
-                        if len(rows) >= limit: break
-                    time.sleep(0.3)
-                except Exception:
-                    continue
+            next_page = None
+
+            while len(rows) < limit:
+                vids = yt.search().list(
+                    q=kw,
+                    part="id",
+                    type="video",
+                    maxResults=25,        # ✅ increased
+                    pageToken=next_page,
+                    regionCode="IN",
+                    order="date"          # ✅ newer videos
+                ).execute()
+
+                next_page = vids.get("nextPageToken")
+
+                for v in vids.get("items", []):
+                    if len(rows) >= limit:
+                        break
+
+                    try:
+                        comments = yt.commentThreads().list(
+                            part="snippet",
+                            videoId=v["id"]["videoId"],
+                            maxResults=100,
+                            textFormat="plainText"
+                        ).execute()
+
+                        for c in comments.get("items", []):
+                            t = c["snippet"]["topLevelComment"]["snippet"].get("textDisplay", "")
+
+                            if not t:
+                                continue
+
+                            t = t.strip()
+                            norm = _normalise(t)
+
+                            if (
+                                len(t) >= 15
+                                and norm not in seen
+                                and norm not in existing_comments   # ✅ cross-run dedup
+                            ):
+                                seen.add(norm)
+                                lang = _detect_lang(t)
+                                rows.append(_make_row(scheme, "YouTube", lang, t))
+
+                            if len(rows) >= limit:
+                                break
+
+                        time.sleep(0.2)
+
+                    except Exception:
+                        continue
+
+                if not next_page:
+                    break
+
         except Exception as e:
             if cb: cb(f"YouTube error: {e}")
+
     if cb: cb(f"YouTube: {len(rows)} unique comments fetched")
     return rows
 
@@ -440,10 +489,11 @@ def fetch_youtube(scheme, limit=300, cb=None):
 # ═════════════════════════════════════════════════════════════════════════════
 #  NEWS API FETCHER  — Official API, real-time, unchanged
 # ═════════════════════════════════════════════════════════════════════════════
-def fetch_news(scheme, limit=200, cb=None):
+def fetch_news(scheme, limit=400, cb=None):
     if not NEWS_API_KEY:
         if cb: cb("News: No API key — add NEWS_API_KEY to .env")
         return []
+
     try:
         from newsapi import NewsApiClient
         api = NewsApiClient(api_key=NEWS_API_KEY)
@@ -451,31 +501,65 @@ def fetch_news(scheme, limit=200, cb=None):
         if cb: cb("News: Run → pip install newsapi-python")
         return []
 
+    from data.storage import load_data
+
     rows = []
     seen = set()
-    for kw in SCHEME_KEYWORDS.get(scheme, [scheme])[:1]:
-        if len(rows) >= limit: break
+
+    # ✅ Prevent duplicates across runs
+    try:
+        existing_comments = set(
+            load_data()["Comment"].dropna().str.lower().str.strip()
+        )
+    except Exception:
+        existing_comments = set()
+
+    for kw in SCHEME_KEYWORDS.get(scheme, [scheme])[:5]:  # ✅ more keywords
+        if len(rows) >= limit:
+            break
+
         try:
-            resp = api.get_everything(
-                q=kw, language="en",
-                sort_by="publishedAt", page_size=100
-            )
-            for a in resp.get("articles", []):
-                for text in [a.get("title",""), a.get("description","")]:
-                    text = text.strip()
-                    norm = _normalise(text)
-                    if (len(text) >= 15
+            for page in range(1, 6):   # ✅ pagination (500 results max)
+                if len(rows) >= limit:
+                    break
+
+                resp = api.get_everything(
+                    q=kw,
+                    language="en",
+                    sort_by="publishedAt",
+                    page_size=100,
+                    page=page
+                )
+
+                for a in resp.get("articles", []):
+                    title = (a.get("title") or "").strip()
+                    desc  = (a.get("description") or "").strip()
+
+                    for text in [title, desc]:
+                        if not text:
+                            continue
+
+                        norm = _normalise(text)
+
+                        if (
+                            len(text) >= 15
                             and "[Removed]" not in text
-                            and norm not in seen):
-                        seen.add(norm)
-                        rows.append(_make_row(scheme, "News App", "en", text[:400]))
-                if len(rows) >= limit: break
-            time.sleep(0.3)
+                            and norm not in seen
+                            and norm not in existing_comments   # ✅ cross-run dedup
+                        ):
+                            seen.add(norm)
+                            rows.append(_make_row(scheme, "News App", "en", text[:400]))
+
+                        if len(rows) >= limit:
+                            break
+
+                time.sleep(0.2)
+
         except Exception as e:
             if cb: cb(f"News error: {e}")
+
     if cb: cb(f"News: {len(rows)} unique articles fetched")
     return rows
-
 
 # ═════════════════════════════════════════════════════════════════════════════
 #  GOOGLE NEWS RSS FETCHER
@@ -484,7 +568,7 @@ def fetch_news(scheme, limit=200, cb=None):
 #  ✅ Official RSS feed from Google — not scraping
 #  ✅ English headlines and descriptions about Indian govt schemes
 # ═════════════════════════════════════════════════════════════════════════════
-def fetch_google_news_rss(scheme: str, limit: int = 200, cb=None) -> list:
+def fetch_google_news_rss(scheme: str, limit: int = 200, cb=None, existing_seen=None) -> list:
     """
     Fetches Google News RSS feed for Indian government schemes.
 
@@ -499,12 +583,17 @@ def fetch_google_news_rss(scheme: str, limit: int = 200, cb=None) -> list:
     try:
         import requests
         from bs4 import BeautifulSoup
+        import urllib.parse
+        import time
     except ImportError:
         if cb: cb("Google News RSS: Run → pip install requests beautifulsoup4 lxml")
         return []
 
-    rows    = []
-    seen    = set()
+    rows = []
+
+    # 🔥 IMPORTANT FIX: persist seen across runs
+    seen = set(existing_seen) if existing_seen else set()
+
     headers = {"User-Agent": "Mozilla/5.0 (compatible; RSSReader/1.0)"}
 
     search_terms = SCHEME_KEYWORDS.get(scheme, [scheme])[:3]
@@ -512,11 +601,14 @@ def fetch_google_news_rss(scheme: str, limit: int = 200, cb=None) -> list:
     for term in search_terms:
         if len(rows) >= limit:
             break
+
         try:
             # Google News RSS — India edition, English
-            query   = urllib.parse.quote(f"{term} India government scheme")
-            rss_url = (f"https://news.google.com/rss/search"
-                       f"?q={query}&hl=en-IN&gl=IN&ceid=IN:en")
+            query = urllib.parse.quote(f"{term} India government scheme")
+            rss_url = (
+                f"https://news.google.com/rss/search"
+                f"?q={query}&hl=en-IN&gl=IN&ceid=IN:en"
+            )
 
             resp = requests.get(rss_url, headers=headers, timeout=10)
             if resp.status_code != 200:
@@ -534,10 +626,14 @@ def fetch_google_news_rss(scheme: str, limit: int = 200, cb=None) -> list:
                 title_tag = item.find("title")
                 if title_tag:
                     text = title_tag.get_text(strip=True)
+
                     # Remove source suffix " - Source Name"
                     if " - " in text:
                         text = text.rsplit(" - ", 1)[0].strip()
+
                     norm = _normalise(text)
+
+                    # 🔥 GLOBAL DEDUP FIX
                     if len(text) >= 20 and norm not in seen:
                         seen.add(norm)
                         rows.append(_make_row(scheme, "Google News", "en", text))
@@ -545,12 +641,16 @@ def fetch_google_news_rss(scheme: str, limit: int = 200, cb=None) -> list:
                 # Extract description
                 desc_tag = item.find("description")
                 if desc_tag and len(rows) < limit:
-                    # Description is often HTML — extract plain text
+
                     desc_soup = BeautifulSoup(desc_tag.get_text(), "html.parser")
                     text = desc_soup.get_text(strip=True)
+
                     if " - " in text:
                         text = text.rsplit(" - ", 1)[0].strip()
+
                     norm = _normalise(text)
+
+                    # 🔥 GLOBAL DEDUP FIX
                     if len(text) >= 20 and norm not in seen:
                         seen.add(norm)
                         rows.append(_make_row(scheme, "Google News", "en", text[:400]))
