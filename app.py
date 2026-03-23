@@ -580,12 +580,8 @@ else:                                                          # ← 0 spaces
 
     st.markdown("<div class='div'></div>", unsafe_allow_html=True)
 
-    # ── Tab creation — admin gets Data tab, others don't ─────────────────────
-    if is_admin:                                               # ← 4 spaces
-        t1, t2, t3, t4, t5 = st.tabs(["Analysis","Live Probe","Platforms","Data","About"])
-    else:                                                      # ← 4 spaces
-        t1, t2, t3, t5 = st.tabs(["Analysis","Live Probe","Platforms","About"])
-        t4 = None
+    # ── Tab creation — always 5 tabs, Data content blocked for non-admin ─────
+    t1, t2, t3, t4, t5 = st.tabs(["Analysis","Live Probe","Platforms","Data","About"])
 
     # ══════════════════════════════════════════════════════════════════════════
     #  TAB 1 — ANALYSIS
@@ -1057,10 +1053,19 @@ else:                                                          # ← 0 spaces
         st.markdown("</div>", unsafe_allow_html=True)
 
     # ══════════════════════════════════════════════════════════════════════════
-    #  TAB 4 — DATA  (admin only — t4 is None for regular users)
+    #  TAB 4 — DATA  (content only visible to admin)
     # ══════════════════════════════════════════════════════════════════════════
-    if t4 is not None:                                         # ← 4 spaces
-        with t4:                                               # ← 8 spaces
+    with t4:                                                   # ← 4 spaces
+        if not is_admin:
+            st.markdown("""
+            <div style="text-align:center;padding:80px 20px;">
+                <div style="font-size:36px;margin-bottom:14px;">🔒</div>
+                <div style="font-family:'Syne',sans-serif;font-size:17px;font-weight:700;
+                     color:#8fa8c8;margin-bottom:8px;">Admin Access Only</div>
+                <div style="font-family:'Inter',sans-serif;font-size:13px;color:#4a6380;">
+                     Data fetching is restricted to administrators.</div>
+            </div>""", unsafe_allow_html=True)
+        else:
             st.markdown("<div class='card'>", unsafe_allow_html=True)
             st.markdown("<div class='label'>Fetch Live Data</div>", unsafe_allow_html=True)
 
