@@ -489,11 +489,24 @@ def fetch_youtube(scheme, limit=500, cb=None):
 # ═════════════════════════════════════════════════════════════════════════════
 #  NEWS API FETCHER  — Official API, real-time, unchanged
 # ═════════════════════════════════════════════════════════════════════════════
-def fetch_news(scheme, limit=400, cb=None):
+def fetch_news(scheme, limit=200, cb=None):
+    """
+    NewsAPI fetcher — corrected for free developer tier.
+
+    Free tier hard limits:
+      - Max 100 results per request (page_size=100)
+      - Only page=1 allowed — page 2+ throws maximumResultsReached
+      - Max 1 month of article history
+
+    Fix:
+      - Removed pagination (page loop removed entirely)
+      - Iterates more keywords instead to get more results
+      - Caps page_size at 100
+      - Silently skips the maximumResultsReached error instead of logging it
+    """
     if not NEWS_API_KEY:
         if cb: cb("News: No API key — add NEWS_API_KEY to .env")
         return []
-
     try:
         from newsapi import NewsApiClient
         api = NewsApiClient(api_key=NEWS_API_KEY)
@@ -501,12 +514,8 @@ def fetch_news(scheme, limit=400, cb=None):
         if cb: cb("News: Run → pip install newsapi-python")
         return []
 
+    # Load existing comments to avoid cross-run duplicates
     from data.storage import load_data
-
-    rows = []
-    seen = set()
-
-    # ✅ Prevent duplicates across runs
     try:
         existing_comments = set(
             load_data()["Comment"].dropna().str.lower().str.strip()
@@ -514,53 +523,74 @@ def fetch_news(scheme, limit=400, cb=None):
     except Exception:
         existing_comments = set()
 
-    for kw in SCHEME_KEYWORDS.get(scheme, [scheme])[:5]:  # ✅ more keywords
+    rows = []
+    seen = set()
+
+    # Use up to 5 keywords — each keyword = 1 API call = up to 100 results
+    # This gives up to 500 results total without hitting pagination limit
+    keywords = SCHEME_KEYWORDS.get(scheme, [scheme])[:5]
+
+    for kw in keywords:
         if len(rows) >= limit:
             break
-
         try:
-            for page in range(1, 6):   # ✅ pagination (500 results max)
+            # Free tier: page_size max 100, page must be 1
+            resp = api.get_everything(
+                q=kw,
+                language="en",
+                sort_by="publishedAt",
+                page_size=100,
+                page=1,             # NEVER go to page 2 on free tier
+            )
+
+            # Check for API-level error in response body
+            if isinstance(resp, dict) and resp.get("status") == "error":
+                code = resp.get("code", "")
+                if code == "maximumResultsReached":
+                    # Free tier cap hit — skip silently, try next keyword
+                    continue
+                if cb: cb(f"News API error [{code}]: {resp.get('message','')}")
+                continue
+
+            articles = resp.get("articles", []) if isinstance(resp, dict) else []
+
+            for a in articles:
+                title = (a.get("title") or "").strip()
+                desc  = (a.get("description") or "").strip()
+
+                for text in [title, desc]:
+                    if not text or len(text) < 15:
+                        continue
+                    if "[Removed]" in text:
+                        continue
+
+                    norm = _normalise(text)
+                    if norm in seen:
+                        continue
+                    if norm in existing_comments:
+                        continue
+
+                    seen.add(norm)
+                    rows.append(_make_row(scheme, "News App", "en", text[:400]))
+
+                    if len(rows) >= limit:
+                        break
+
                 if len(rows) >= limit:
                     break
 
-                resp = api.get_everything(
-                    q=kw,
-                    language="en",
-                    sort_by="publishedAt",
-                    page_size=100,
-                    page=page
-                )
-
-                for a in resp.get("articles", []):
-                    title = (a.get("title") or "").strip()
-                    desc  = (a.get("description") or "").strip()
-
-                    for text in [title, desc]:
-                        if not text:
-                            continue
-
-                        norm = _normalise(text)
-
-                        if (
-                            len(text) >= 15
-                            and "[Removed]" not in text
-                            and norm not in seen
-                            and norm not in existing_comments   # ✅ cross-run dedup
-                        ):
-                            seen.add(norm)
-                            rows.append(_make_row(scheme, "News App", "en", text[:400]))
-
-                        if len(rows) >= limit:
-                            break
-
-                time.sleep(0.2)
+            time.sleep(0.3)
 
         except Exception as e:
-            if cb: cb(f"News error: {e}")
+            err_str = str(e)
+            # Silently skip the pagination error — it's expected on free tier
+            if "maximumResultsReached" in err_str:
+                continue
+            if cb: cb(f"News error for '{kw}': {err_str}")
+            continue
 
     if cb: cb(f"News: {len(rows)} unique articles fetched")
     return rows
-
 # ═════════════════════════════════════════════════════════════════════════════
 #  GOOGLE NEWS RSS FETCHER
 #  ✅ No API key needed
